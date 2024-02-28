@@ -22,6 +22,7 @@ REGISTRY_URL = "docker.stackable.tech"
 
 
 def main():
+    result = []
     with tempfile.TemporaryDirectory() as tempdir:
         for release in releases:
             # Create a file in the temp dir and download the conf.py from the git tag referring to that version
@@ -42,7 +43,6 @@ def main():
             # Load product versions from that file using the image-tools functionality
             product_versions = load_configuration(filename)
 
-            result = []
             # Generate image names
             product_names: list[str] = [product["name"] for product in product_versions.products]
             for product in product_versions.products:
