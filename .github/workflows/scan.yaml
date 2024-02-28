@@ -26,12 +26,12 @@ jobs:
   scan:
     needs: image_list
     runs-on: ubuntu-latest
-#    strategy:
-#      matrix:
-#        image: ${{ fromJson(needs.image_list.outputs.matrix) }}
+    strategy:
+      matrix:
+        image: ${{ fromJson(needs.image_list.outputs.matrix) }}
     steps:
       - name: Debug
-        run: echo ${{ needs.image_list.outputs.matrix }}
+        run: echo ${{image }}
 #      - name: Run Grype image
 #        uses: MaibornWolff/secobserve_actions_templates/actions/SCA/grype_image@main
 #        with:
