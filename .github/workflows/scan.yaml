@@ -31,7 +31,7 @@ jobs:
         image: ${{ fromJson(needs.image_list.outputs.matrix) }}
     steps:
       - name: Debug
-        run: echo ${{image }}
+        run: echo ${{ matrix.image }}
 #      - name: Run Grype image
 #        uses: MaibornWolff/secobserve_actions_templates/actions/SCA/grype_image@main
 #        with:
