@@ -32,8 +32,6 @@ jobs:
       matrix:
         product_version: ${{ fromJson(needs.image_list.outputs.matrix) }}
     steps:
-      - name: Debug
-        run: echo ${{ matrix.product_version.release }}-${{ matrix.product_version.product }}-${{ matrix.product_version.version }}
       - name: Run Grype image
         uses: MaibornWolff/secobserve_actions_templates/actions/SCA/grype_image@main
         with:
@@ -43,8 +41,19 @@ jobs:
           so_branch_name: ${{ matrix.product_version.version }}-stackable${{ matrix.product_version.release }}
           so_api_base_url:  https://secobserve.stackable.tech
           so_api_token: ${{ secrets.SECOBSERVE_API_TOKEN }}
+      - name: Run Trivy image
+        uses: MaibornWolff/secobserve_actions_templates/actions/SCA/trivy_image@main
+        with:
+          target: 'maibornwolff/dd-import:latest'
+          report_name: 'dd_import_trivy_image.json'
+          so_api_base_url:  https://secobserve.stackable.tech
+          so_api_token: ${{ secrets.SECOBSERVE_API_TOKEN }}
+          so_product_name: ${{ matrix.product_version.product }}
+          so_branch_name: ${{ matrix.product_version.version }}-stackable${{ matrix.product_version.release }}
       - name: Upload results
         uses: actions/upload-artifact@v3
         with:
           name: secobserve
-          path: dd_import_grype_image.json
+          path:
+            - dd_import_grype_image.json
+            - dd_import_trivy_image.json
