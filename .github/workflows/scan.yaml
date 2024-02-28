@@ -24,7 +24,6 @@ jobs:
 
   scan:
     needs: image_list
-
     runs-on: ubuntu-latest
 #    strategy:
 #      matrix:
