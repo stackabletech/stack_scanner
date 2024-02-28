@@ -1,7 +1,6 @@
 name: Scan all images
 on:
   workflow_dispatch:
-
   schedule:
     - cron: '30 2 * * *'
 
@@ -58,6 +57,6 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: secobserve
-          path:
-            - dd_import_grype_image.json
-            - dd_import_trivy_image.json
+          path: |
+            dd_import_trivy_image.json
+            dd_import_grype_image.json
