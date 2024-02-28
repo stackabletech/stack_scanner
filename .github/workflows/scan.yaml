@@ -39,8 +39,8 @@ jobs:
           report_name: 'dd_import_grype_image.json'
           so_product_name: ${{ matrix.product_version.product }}
           so_branch_name: ${{ matrix.product_version.release }}
-#          so_api_base_url: ${{ vars.SO_API_BASE_URL }}
-#          so_api_token: ${{ secrets.SO_API_TOKEN }}
+          so_api_base_url:  https://secobserve.stackable.tech
+          so_api_token: ${{ secrets.SECOBSERVE_API_TOKEN }}
 #      - name: Upload results
 #          uses: actions/upload-artifact@v3
 #          with:
