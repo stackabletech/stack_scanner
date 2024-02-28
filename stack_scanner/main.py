@@ -56,7 +56,13 @@ def main():
                     #print(f"Scanning {REGISTRY_URL}/stackable/{product_name}:{product_version}-stackable{release}")
                     print(f"grype -o cyclonedx --file {release}-{product_name}-{product_version}.cdx {image_name}")
                     #subprocess.run(["grype", "-o",  "json", "--file", f"release-{product_name}-{product_version}.cdx", f"{image_name}"])
-                    result.append(image_name)
+                    tmp = {
+                        "product": product_name,
+                        "version": product_version,
+                        "release": release
+                    }
+
+                    result.append(tmp)
 
     # All done
     json_list = json.dumps(result)
