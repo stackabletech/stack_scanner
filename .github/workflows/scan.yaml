@@ -26,7 +26,9 @@ jobs:
   scan:
     needs: image_list
     runs-on: ubuntu-latest
+    continue-on-error: true
     strategy:
+      fail_fast: false
       matrix:
         product_version: ${{ fromJson(needs.image_list.outputs.matrix) }}
     steps:
