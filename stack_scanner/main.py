@@ -43,11 +43,15 @@ def main():
             product_names: list[str] = [product["name"] for product in product_versions.products]
             for product in product_versions.products:
                 product_name: str = product["name"]
+
                 if product_name in excluded_products:
                     continue
                 product_targets = {}
                 for version_dict in product.get("versions", []):
-                    print(f"{REGISTRY_URL}/stackable/{product_name}:{version_dict['product']}-stackable{release}")
+                    product_version: str = version_dict['product']
+                    image_name = f"{REGISTRY_URL}/stackable/{product_name}:{product_version}-stackable{release}"
+                    #print(f"Scanning {REGISTRY_URL}/stackable/{product_name}:{product_version}-stackable{release}")
+                    print(f"grype -o cyclonedx --file {release}-{product_name}-{product_version}.cdx {image_name}")
 
 
 

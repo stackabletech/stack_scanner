@@ -1,0 +1,17 @@
+name: Scan all images
+on: workflow_dispatch
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: 3.11
+      - name: Run image
+        uses: abatilo/actions-poetry@v2
+        with:
+          poetry-version: 3.11
+      - name: Run scanner
+        run: poetry run python stack_scanner/main.py
