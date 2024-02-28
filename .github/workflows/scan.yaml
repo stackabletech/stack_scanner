@@ -41,7 +41,6 @@ jobs:
           target: docker.stackable.tech/stackable/${{ matrix.product_version.product }}:${{ matrix.product_version.version }}-stackable${{ matrix.product_version.release }}
           report_name: 'dd_import_grype_image.json'
           so_product_name: ${{ matrix.product_version.product }}
-          so_branch_name: ${{ matrix.product_version.version }}-stackable${{ matrix.product_version.release }}
           so_api_base_url:  https://secobserve.stackable.tech
           so_api_token: ${{ secrets.SECOBSERVE_API_TOKEN }}
       - name: Run Trivy image

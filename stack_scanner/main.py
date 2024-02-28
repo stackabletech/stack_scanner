@@ -6,9 +6,9 @@ import os
 import subprocess
 
 releases = [
-    '23.4.0',
-    '23.4.1',
-    '23.7.0',
+#    '23.4.0',
+#    '23.4.1',
+#    '23.7.0',
     '23.11.0',
     '0.0.0-dev'
 ]
@@ -16,6 +16,8 @@ releases = [
 excluded_products = [
     'hello-world',
     'java-base',
+    'testing-tools',
+    'stackable-base'
 ]
 
 REGISTRY_URL = "docker.stackable.tech"
@@ -27,8 +29,11 @@ def main():
         for release in releases:
             # Create a file in the temp dir and download the conf.py from the git tag referring to that version
             filename = os.path.join(tempdir, f"products-{release}.py")
-            url = f"https://raw.githubusercontent.com/stackabletech/docker-images/{release}/conf.py"
-            oldurl = f"https://raw.githubusercontent.com/stackabletech/docker-images/{release}/image_tools/conf.py"
+            branch = release
+            if release == '0.0.0-dev':
+                branch = 'main'
+            url = f"https://raw.githubusercontent.com/stackabletech/docker-images/{branch}/conf.py"
+            oldurl = f"https://raw.githubusercontent.com/stackabletech/docker-images/{branch}/image_tools/conf.py"
             print(f"Loading product config for version [{release}] from [{url}] (via file [{filename}]")
             try:
                 urlretrieve(url, filename)
