@@ -35,7 +35,7 @@ jobs:
       - name: Run Grype image
         uses: MaibornWolff/secobserve_actions_templates/actions/SCA/grype_image@main
         with:
-          target: {{ $matrix.image }}
+          target: ${{ matrix.image }}
           report_name: 'dd_import_grype_image.json'
 #          so_api_base_url: ${{ vars.SO_API_BASE_URL }}
 #          so_api_token: ${{ secrets.SO_API_TOKEN }}
