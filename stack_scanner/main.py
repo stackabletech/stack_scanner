@@ -59,6 +59,8 @@ def main():
                     result.append(image_name)
 
     # All done
+    json_list = json.dumps(result)
+    print(f"{json_list}")
     print(f'::set-output name=matrix::{json.dumps(result)}')
 
 
