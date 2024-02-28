@@ -32,11 +32,11 @@ jobs:
     steps:
       - name: Debug
         run: echo ${{ matrix.image }}
-#      - name: Run Grype image
-#        uses: MaibornWolff/secobserve_actions_templates/actions/SCA/grype_image@main
-#        with:
-#          target: {{ $image }}
-#          report_name: 'dd_import_grype_image.json'
+      - name: Run Grype image
+        uses: MaibornWolff/secobserve_actions_templates/actions/SCA/grype_image@main
+        with:
+          target: {{ $matrix.image }}
+          report_name: 'dd_import_grype_image.json'
 #          so_api_base_url: ${{ vars.SO_API_BASE_URL }}
 #          so_api_token: ${{ secrets.SO_API_TOKEN }}
 #          so_product_name: ${{ vars.SO_PRODUCT_NAME }}
