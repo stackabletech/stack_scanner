@@ -6,12 +6,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: 3.11
       - name: Run image
         uses: abatilo/actions-poetry@v2
         with:
           poetry-version: 1.7.1
+      - name: Install deps
+        run: poetry install
       - name: Run scanner
         run: poetry run python stack_scanner/main.py
