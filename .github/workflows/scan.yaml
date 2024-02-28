@@ -2,7 +2,7 @@ name: Scan all images
 on: workflow_dispatch
 
 jobs:
-  scan:
+  image_list:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,5 +17,23 @@ jobs:
         run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
       - name: Install deps
         run: poetry install
-      - name: Run scanner
+      - name: scan
         run: poetry run python stack_scanner/main.py
+    outputs:
+      matrix: ${{ steps.scan.outputs.matrix }}
+
+  scan:
+    needs: image_list
+
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package: ${{ fromJson(needs.image_list.outputs.matrix) }}
+    steps:
+      - name: Debug
+        run: echo ${matrix.package}
+#      - name: Scan image
+#        uses: anchore/scan-action@v3
+#        with:
+#          image: "localbuild/testimage:latest"
+#      - name: Upload report

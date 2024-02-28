@@ -1,3 +1,4 @@
+import json
 from urllib.request import urlretrieve
 from image_tools.args import load_configuration
 import tempfile
@@ -40,6 +41,7 @@ def main():
             # Load product versions from that file using the image-tools functionality
             product_versions = load_configuration(filename)
 
+            result = []
             # Generate image names
             product_names: list[str] = [product["name"] for product in product_versions.products]
             for product in product_versions.products:
@@ -53,7 +55,11 @@ def main():
                     image_name = f"{REGISTRY_URL}/stackable/{product_name}:{product_version}-stackable{release}"
                     #print(f"Scanning {REGISTRY_URL}/stackable/{product_name}:{product_version}-stackable{release}")
                     print(f"grype -o cyclonedx --file {release}-{product_name}-{product_version}.cdx {image_name}")
-                    subprocess.run(["grype", "-o",  "json", "--file", f"release-{product_name}-{product_version}.cdx", f"{image_name}"])
+                    #subprocess.run(["grype", "-o",  "json", "--file", f"release-{product_name}-{product_version}.cdx", f"{image_name}"])
+                    result.append(image_name)
+
+    # All done
+    print(f'::set-output name=matrix::{json.dumps(result)}')
 
 
 
