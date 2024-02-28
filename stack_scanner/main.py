@@ -2,6 +2,7 @@ from urllib.request import urlretrieve
 from image_tools.args import load_configuration
 import tempfile
 import os
+import subprocess
 
 releases = [
     '23.4.0',
@@ -52,6 +53,7 @@ def main():
                     image_name = f"{REGISTRY_URL}/stackable/{product_name}:{product_version}-stackable{release}"
                     #print(f"Scanning {REGISTRY_URL}/stackable/{product_name}:{product_version}-stackable{release}")
                     print(f"grype -o cyclonedx --file {release}-{product_name}-{product_version}.cdx {image_name}")
+                    subprocess.run(["grype", "-o",  "json", "--file", f"release-{product_name}-{product_version}.cdx", f"{image_name}"])
 
 
 
