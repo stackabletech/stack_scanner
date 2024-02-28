@@ -26,12 +26,12 @@ jobs:
     needs: image_list
 
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        package: ${{ fromJson(needs.image_list.outputs.matrix) }}
+#    strategy:
+#      matrix:
+#        package: ${{ fromJson(needs.image_list.outputs.matrix) }}
     steps:
       - name: Debug
-        run: echo ${matrix.package}
+        run: echo ${{ needs.image_list.outputs.matrix }}
 #      - name: Scan image
 #        uses: anchore/scan-action@v3
 #        with:
