@@ -13,6 +13,8 @@ jobs:
         uses: abatilo/actions-poetry@v2
         with:
           poetry-version: 1.7.1
+      - name: Install grype
+        run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
       - name: Install deps
         run: poetry install
       - name: Run scanner
