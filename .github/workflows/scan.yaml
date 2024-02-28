@@ -17,7 +17,8 @@ jobs:
         run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
       - name: Install deps
         run: poetry install
-      - name: scan
+      - name: Generate image names
+        id: scan
         run: poetry run python stack_scanner/main.py
     outputs:
       matrix: ${{ steps.scan.outputs.matrix }}
@@ -27,12 +28,20 @@ jobs:
     runs-on: ubuntu-latest
 #    strategy:
 #      matrix:
-#        package: ${{ fromJson(needs.image_list.outputs.matrix) }}
+#        image: ${{ fromJson(needs.image_list.outputs.matrix) }}
     steps:
       - name: Debug
         run: echo ${{ needs.image_list.outputs.matrix }}
-#      - name: Scan image
-#        uses: anchore/scan-action@v3
+#      - name: Run Grype image
+#        uses: MaibornWolff/secobserve_actions_templates/actions/SCA/grype_image@main
 #        with:
-#          image: "localbuild/testimage:latest"
-#      - name: Upload report
+#          target: {{ $image }}
+#          report_name: 'dd_import_grype_image.json'
+#          so_api_base_url: ${{ vars.SO_API_BASE_URL }}
+#          so_api_token: ${{ secrets.SO_API_TOKEN }}
+#          so_product_name: ${{ vars.SO_PRODUCT_NAME }}
+#      - name: Upload results
+#          uses: actions/upload-artifact@v3
+#          with:
+#            name: secobserve
+#            path: dd_import_grype_image.json
