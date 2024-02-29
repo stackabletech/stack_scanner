@@ -6,9 +6,9 @@ import os
 import subprocess
 
 releases = [
-#    '23.4.0',
-#    '23.4.1',
-#    '23.7.0',
+    '23.4.0',
+    '23.4.1',
+    '23.7.0',
     '23.11.0',
     '0.0.0-dev'
 ]
@@ -17,11 +17,13 @@ excluded_products = [
     'hello-world',
     'java-base',
     'testing-tools',
-    'stackable-base'
+    'stackable-base',
+    'trino-cli',
+    'vector',
+    'omid'
 ]
 
 REGISTRY_URL = "docker.stackable.tech"
-
 
 def main():
     result = []
@@ -61,7 +63,6 @@ def main():
                     image_name = f"{REGISTRY_URL}/stackable/{product_name}:{product_version}-stackable{release}"
                     #print(f"Scanning {REGISTRY_URL}/stackable/{product_name}:{product_version}-stackable{release}")
                     print(f"grype -o cyclonedx --file {release}-{product_name}-{product_version}.cdx {image_name}")
-                    #subprocess.run(["grype", "-o",  "json", "--file", f"release-{product_name}-{product_version}.cdx", f"{image_name}"])
                     tmp = {
                         "product": product_name,
                         "version": product_version,
@@ -73,7 +74,5 @@ def main():
     # All done
     json_list = json.dumps(result)
     print(f'::set-output name=matrix::{json.dumps(result)}')
-
-
 
 if __name__ == "__main__": main()
