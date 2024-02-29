@@ -66,7 +66,9 @@ def main():
                     tmp = {
                         "product": product_name,
                         "version": product_version,
-                        "release": release
+                        "release": release,
+                        "image": f"{REGISTRY_URL}/stackable/{product_name}",
+                        "tag": f"{product_version}-stackable{release}"
                     }
 
                     result.append(tmp)

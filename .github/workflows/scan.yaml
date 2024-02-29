@@ -35,27 +35,34 @@ jobs:
       matrix:
         product_version: ${{ fromJson(needs.image_list.outputs.matrix) }}
     steps:
-      - name: Run Grype image
-        uses: MaibornWolff/secobserve_actions_templates/actions/SCA/grype_image@main
+#      - name: Run Grype image
+#        uses: MaibornWolff/secobserve_actions_templates/actions/SCA/grype_image@main
+#        with:
+#          target: docker.stackable.tech/stackable/${{ matrix.product_version.product }}:${{ matrix.product_version.version }}-stackable${{ matrix.product_version.release }}
+#          report_name: 'dd_import_grype_image.json'
+#          so_product_name: ${{ matrix.product_version.product }}
+#          so_api_base_url:  https://secobserve.stackable.tech
+#          so_api_token: ${{ secrets.SECOBSERVE_API_TOKEN }}
+#      - name: Run Trivy image
+#        uses: MaibornWolff/secobserve_actions_templates/actions/SCA/trivy_image@main
+#        with:
+#          target: 'maibornwolff/dd-import:latest'
+#          report_name: 'dd_import_trivy_image.json'
+#          so_api_base_url:  https://secobserve.stackable.tech
+#          so_api_token: ${{ secrets.SECOBSERVE_API_TOKEN }}
+#          so_product_name: ${{ matrix.product_version.product }}
+#          so_branch_name: ${{ matrix.product_version.version }}-stackable${{ matrix.product_version.release }}
+      - name: Scan Remote Image
+        uses: neuvector/scan-action@main
         with:
-          target: docker.stackable.tech/stackable/${{ matrix.product_version.product }}:${{ matrix.product_version.version }}-stackable${{ matrix.product_version.release }}
-          report_name: 'dd_import_grype_image.json'
-          so_product_name: ${{ matrix.product_version.product }}
-          so_api_base_url:  https://secobserve.stackable.tech
-          so_api_token: ${{ secrets.SECOBSERVE_API_TOKEN }}
-      - name: Run Trivy image
-        uses: MaibornWolff/secobserve_actions_templates/actions/SCA/trivy_image@main
-        with:
-          target: 'maibornwolff/dd-import:latest'
-          report_name: 'dd_import_trivy_image.json'
-          so_api_base_url:  https://secobserve.stackable.tech
-          so_api_token: ${{ secrets.SECOBSERVE_API_TOKEN }}
-          so_product_name: ${{ matrix.product_version.product }}
-          so_branch_name: ${{ matrix.product_version.version }}-stackable${{ matrix.product_version.release }}
-      - name: Upload results
-        uses: actions/upload-artifact@v3
-        with:
-          name: secobserve
-          path: |
-            dd_import_trivy_image.json
-            dd_import_grype_image.json
+          image-repository: ${{ matrix.image }}
+          image-tag: ${{ matrix.tag }}
+      - name: List files to see if NeuVector outputs something
+        run: ls
+#      - name: Upload results
+#        uses: actions/upload-artifact@v3
+#        with:
+#          name: secobserve
+#          path: |
+#            dd_import_trivy_image.json
+#            dd_import_grype_image.json
