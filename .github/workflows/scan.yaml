@@ -58,6 +58,8 @@ jobs:
         with:
           image-repository: ${{ matrix.image }}
           image-tag: ${{ matrix.tag }}
+          output: json
+          debug: true
       - name: List files to see if NeuVector outputs something
         run: ls
 #      - name: Upload results
