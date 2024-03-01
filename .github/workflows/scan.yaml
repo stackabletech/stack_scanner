@@ -37,15 +37,16 @@ jobs:
         product_version: ${{ fromJson(needs.image_list.outputs.matrix) }}
     steps:
       - name: Run Grype image
-        uses: MaibornWolff/secobserve_actions_templates/actions/SCA/grype_image@main
+        uses: dervoeti/secobserve_actions_templates/actions/SCA/grype_image@fix/add-missing-branch-name-input
         with:
           target: docker.stackable.tech/stackable/${{ matrix.product_version.product }}:${{ matrix.product_version.version }}-stackable${{ matrix.product_version.release }}
           report_name: 'dd_import_grype_image.json'
           so_product_name: ${{ matrix.product_version.product }}
           so_api_base_url:  https://secobserve.stackable.tech
           so_api_token: ${{ secrets.SECOBSERVE_API_TOKEN }}
+          so_branch_name: ${{ matrix.product_version.version }}-stackable${{ matrix.product_version.release }}
       - name: Run Trivy image
-        uses: MaibornWolff/secobserve_actions_templates/actions/SCA/trivy_image@main
+        uses: dervoeti/secobserve_actions_templates/actions/SCA/trivy_image@fix/add-missing-branch-name-input
         with:
           target: 'maibornwolff/dd-import:latest'
           report_name: 'dd_import_trivy_image.json'
