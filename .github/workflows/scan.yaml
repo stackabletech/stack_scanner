@@ -47,7 +47,7 @@ jobs:
           so_branch_name: ${{ matrix.product_version.version }}-stackable${{ matrix.product_version.release }}
           further_parameters: "--by-cve"
       - name: Run Trivy image
-        uses: MaibornWolff/secobserve_actions_templates/actions/SCA/grype_image@dev
+        uses: MaibornWolff/secobserve_actions_templates/actions/SCA/trivy_image@dev
         with:
           target: 'maibornwolff/dd-import:latest'
           report_name: 'dd_import_trivy_image.json'
