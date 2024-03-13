@@ -55,13 +55,11 @@ def main():
             for product in product_versions.products:
                 product_name: str = product["name"]
 
-                if product_name in excluded_products or product_name != "superset":
+                if product_name in excluded_products:
                     continue
                 product_targets = {}
                 for version_dict in product.get("versions", []):
                     product_version: str = version_dict['product']
-                    if product_version != "3.1.0":
-                        continue
                     image_name = f"{REGISTRY_URL}/stackable/{product_name}:{product_version}-stackable{release}"
                     #print(f"Scanning {REGISTRY_URL}/stackable/{product_name}:{product_version}-stackable{release}")
                     print(f"grype -o cyclonedx --file {release}-{product_name}-{product_version}.cdx {image_name}")
