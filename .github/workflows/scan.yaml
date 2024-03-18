@@ -40,7 +40,7 @@ jobs:
         uses: MaibornWolff/secobserve_actions_templates/actions/SCA/grype_image@dev
         with:
           target: docker.stackable.tech/stackable/${{ matrix.product_version.product }}:${{ matrix.product_version.version }}-stackable${{ matrix.product_version.release }}
-          report_name: 'dd_import_grype_image.json'
+          report_name: 'grype.json'
           so_product_name: ${{ matrix.product_version.product }}
           so_api_base_url:  https://secobserve-backend.stackable.tech
           so_api_token: ${{ secrets.SECOBSERVE_API_TOKEN }}
@@ -49,8 +49,8 @@ jobs:
       - name: Run Trivy image
         uses: MaibornWolff/secobserve_actions_templates/actions/SCA/trivy_image@dev
         with:
-          target: 'maibornwolff/dd-import:latest'
-          report_name: 'dd_import_trivy_image.json'
+          target: docker.stackable.tech/stackable/${{ matrix.product_version.product }}:${{ matrix.product_version.version }}-stackable${{ matrix.product_version.release }}
+          report_name: 'trivy.json'
           so_api_base_url:  https://secobserve-backend.stackable.tech
           so_api_token: ${{ secrets.SECOBSERVE_API_TOKEN }}
           so_product_name: ${{ matrix.product_version.product }}
