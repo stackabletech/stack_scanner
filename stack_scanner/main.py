@@ -68,6 +68,7 @@ def main():
                     f"{REGISTRY_URL}/stackable/{product_name}:{product_version}-stackable{release}"
                 )
                 env["REPORT_NAME"] = "grype.json"
+                env["SO_UPLOAD"] = "true"
                 env["SO_PRODUCT_NAME"] = product_name
                 env["SO_API_BASE_URL"] = "https://secobserve-backend.stackable.tech"
                 env["SO_API_TOKEN"] = secobserve_api_token
@@ -121,6 +122,15 @@ def main():
                 cmd.append("maibornwolff/secobserve-scanners:latest")
 
                 subprocess.run(cmd)
+
+            # Free up space after each product scan
+            os.system(
+                'docker system prune -f'
+            )
+            os.system(
+                'docker system prune -f -a --filter="label=vendor=Stackable GmbH"'
+            )
+
 
 
 if __name__ == "__main__":
