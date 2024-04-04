@@ -5,8 +5,14 @@ on:
     - cron: '30 2 * * *'
 
 jobs:
-  image_list:
+  scan_release_images:
     runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      max-parallel: 2
+      fail-fast: false
+      matrix:
+        release: ['23.4.0', '23.4.1', '23.7.0', '23.11.0', '24.3.0', '0.0.0-dev']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -16,58 +22,8 @@ jobs:
         uses: abatilo/actions-poetry@v2
         with:
           poetry-version: 1.7.1
-      - name: Install grype
-        run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
       - name: Install deps
         run: poetry install
-      - name: Generate image names
+      - name: Scan all images of the release
         id: scan
-        run: poetry run python stack_scanner/main.py
-    outputs:
-      matrix: ${{ steps.scan.outputs.matrix }}
-
-  scan:
-    needs: image_list
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    strategy:
-      max-parallel: 2
-      fail-fast: false
-      matrix:
-        product_version: ${{ fromJson(needs.image_list.outputs.matrix) }}
-    steps:
-      - name: Run Grype image
-        uses: MaibornWolff/secobserve_actions_templates/actions/SCA/grype_image@dev
-        with:
-          target: docker.stackable.tech/stackable/${{ matrix.product_version.product }}:${{ matrix.product_version.version }}-stackable${{ matrix.product_version.release }}
-          report_name: 'grype.json'
-          so_product_name: ${{ matrix.product_version.product }}
-          so_api_base_url:  https://secobserve-backend.stackable.tech
-          so_api_token: ${{ secrets.SECOBSERVE_API_TOKEN }}
-          so_branch_name: ${{ matrix.product_version.version }}-stackable${{ matrix.product_version.release }}
-          further_parameters: "--by-cve"
-      - name: Run Trivy image
-        uses: MaibornWolff/secobserve_actions_templates/actions/SCA/trivy_image@dev
-        with:
-          target: docker.stackable.tech/stackable/${{ matrix.product_version.product }}:${{ matrix.product_version.version }}-stackable${{ matrix.product_version.release }}
-          report_name: 'trivy.json'
-          so_api_base_url:  https://secobserve-backend.stackable.tech
-          so_api_token: ${{ secrets.SECOBSERVE_API_TOKEN }}
-          so_product_name: ${{ matrix.product_version.product }}
-          so_branch_name: ${{ matrix.product_version.version }}-stackable${{ matrix.product_version.release }}
-#      - name: Scan Remote Image
-#        uses: neuvector/scan-action@main
-#        with:
-#          image-repository: ${{ matrix.image }}
-#          image-tag: ${{ matrix.tag }}
-#          output: json
-#          debug: true
-      - name: List files to see if NeuVector outputs something
-        run: ls
-      - name: Upload results
-        uses: actions/upload-artifact@v3
-        with:
-          name: secobserve
-          path: |
-            dd_import_trivy_image.json
-            dd_import_grype_image.json
+        run: poetry run python stack_scanner/main.py ${{ matrix.release }} ${{ secrets.SECOBSERVE_API_TOKEN }}
