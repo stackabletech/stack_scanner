@@ -62,28 +62,26 @@ def main():
             for version_dict in product.get("versions", []):
                 product_version: str = version_dict["product"]
 
-                # Run grype
+                # Run Trivy
                 env = {}
                 env["TARGET"] = (
                     f"{REGISTRY_URL}/stackable/{product_name}:{product_version}-stackable{release}"
                 )
-                env["REPORT_NAME"] = "grype.json"
                 env["SO_UPLOAD"] = "true"
                 env["SO_PRODUCT_NAME"] = product_name
                 env["SO_API_BASE_URL"] = "https://secobserve-backend.stackable.tech"
                 env["SO_API_TOKEN"] = secobserve_api_token
                 env["SO_BRANCH_NAME"] = f"{product_version}-stackable{release}"
-                env["FURTHER_PARAMETERS"] = "--by-cve"
                 env["TMPDIR"] = "/tmp"
-                env["GRYPE_DB_CACHE_DIR"] = "/tmp"
+                env["REPORT_NAME"] = "trivy.json"
 
-                print(f"Scanning {env['TARGET']} with Grype")
+                print(f"Scanning {env['TARGET']} with Trivy")
 
                 cmd = [
                     "docker",
                     "run",
                     "--entrypoint",
-                    "/entrypoints/entrypoint_grype_image.sh",
+                    "/entrypoints/entrypoint_trivy_image.sh",
                     "-v",
                     "/tmp/stackable:/tmp",
                     "-v",
@@ -98,17 +96,18 @@ def main():
 
                 subprocess.run(cmd)
 
-                # Run Trivy
-                env["REPORT_NAME"] = "trivy.json"
-                del env["FURTHER_PARAMETERS"]
+                # Run Grype
+                print(f"Scanning {env['TARGET']} with Grype")
 
-                print(f"Scanning {env['TARGET']} with Trivy")
+                env["FURTHER_PARAMETERS"] = "--by-cve"
+                env["GRYPE_DB_CACHE_DIR"] = "/tmp"
+                env["REPORT_NAME"] = "grype.json"
 
                 cmd = [
                     "docker",
                     "run",
                     "--entrypoint",
-                    "/entrypoints/entrypoint_trivy_image.sh",
+                    "/entrypoints/entrypoint_grype_image.sh",
                     "-v",
                     "/tmp/stackable:/tmp",
                     "-v",
