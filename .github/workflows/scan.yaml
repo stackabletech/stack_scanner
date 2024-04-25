@@ -2,7 +2,7 @@ name: Scan all images
 on:
   workflow_dispatch:
   schedule:
-    - cron: '30 2 * * *'
+    - cron: '30 22 * * *' # UTC
 
 jobs:
   scan_release_images:
