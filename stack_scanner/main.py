@@ -51,6 +51,19 @@ def main():
                 print(f"Unable to retrieve config file for release [{release}]")
                 sys.exit(1)
 
+        operators = ["airflow", "commons", "druid", "hbase", "hdfs", "hello-world", "hive", "kafka", "listener", "nifi", "opa", "secret", "spark-k8s", "superset", "trino", "zookeeper"]
+
+        for operator_name in operators:
+            scan_image(secobserve_api_token, f"{operator_name}-operator", release)
+
+        # Free up space after scanning operators
+        os.system(
+            'docker system prune -f'
+        )
+        os.system(
+            'docker system prune -f -a --filter="label=vendor=Stackable GmbH"'
+        )
+
         # Load product versions from that file using the image-tools functionality
         product_versions = load_configuration(filename)
 
@@ -62,65 +75,7 @@ def main():
             for version_dict in product.get("versions", []):
                 product_version: str = version_dict["product"]
 
-                # Run Trivy
-                env = {}
-                env["TARGET"] = (
-                    f"{REGISTRY_URL}/stackable/{product_name}:{product_version}-stackable{release}"
-                )
-                env["SO_UPLOAD"] = "true"
-                env["SO_PRODUCT_NAME"] = product_name
-                env["SO_API_BASE_URL"] = "https://secobserve-backend.stackable.tech"
-                env["SO_API_TOKEN"] = secobserve_api_token
-                env["SO_BRANCH_NAME"] = f"{product_version}-stackable{release}"
-                env["TMPDIR"] = "/tmp"
-                env["REPORT_NAME"] = "trivy.json"
-
-                print(f"Scanning {env['TARGET']} with Trivy")
-
-                cmd = [
-                    "docker",
-                    "run",
-                    "--entrypoint",
-                    "/entrypoints/entrypoint_trivy_image.sh",
-                    "-v",
-                    "/tmp/stackable:/tmp",
-                    "-v",
-                    "/var/run/docker.sock:/var/run/docker.sock",
-                ]
-
-                for key, value in env.items():
-                    cmd.append("-e")
-                    cmd.append(f"{key}={value}")
-
-                cmd.append("maibornwolff/secobserve-scanners:latest")
-
-                subprocess.run(cmd)
-
-                # Run Grype
-                print(f"Scanning {env['TARGET']} with Grype")
-
-                env["FURTHER_PARAMETERS"] = "--by-cve"
-                env["GRYPE_DB_CACHE_DIR"] = "/tmp"
-                env["REPORT_NAME"] = "grype.json"
-
-                cmd = [
-                    "docker",
-                    "run",
-                    "--entrypoint",
-                    "/entrypoints/entrypoint_grype_image.sh",
-                    "-v",
-                    "/tmp/stackable:/tmp",
-                    "-v",
-                    "/var/run/docker.sock:/var/run/docker.sock",
-                ]
-
-                for key, value in env.items():
-                    cmd.append("-e")
-                    cmd.append(f"{key}={value}")
-
-                cmd.append("maibornwolff/secobserve-scanners:latest")
-
-                subprocess.run(cmd)
+                scan_image(secobserve_api_token, product_name, f"{product_version}-stackable{release}")
 
             # Free up space after each product scan
             os.system(
@@ -130,7 +85,66 @@ def main():
                 'docker system prune -f -a --filter="label=vendor=Stackable GmbH"'
             )
 
+def scan_image(secobserve_api_token: str, product_name: str, image_tag: str) -> None:
+    # Run Trivy
+    env = {}
+    env["TARGET"] = (
+        f"{REGISTRY_URL}/stackable/{product_name}:{image_tag}"
+    )
+    env["SO_UPLOAD"] = "true"
+    env["SO_PRODUCT_NAME"] = product_name
+    env["SO_API_BASE_URL"] = "https://secobserve-backend.stackable.tech"
+    env["SO_API_TOKEN"] = secobserve_api_token
+    env["SO_BRANCH_NAME"] = image_tag
+    env["TMPDIR"] = "/tmp"
+    env["REPORT_NAME"] = "trivy.json"
 
+    print(f"Scanning {env['TARGET']} with Trivy")
+
+    cmd = [
+        "docker",
+        "run",
+        "--entrypoint",
+        "/entrypoints/entrypoint_trivy_image.sh",
+        "-v",
+        "/tmp/stackable:/tmp",
+        "-v",
+        "/var/run/docker.sock:/var/run/docker.sock",
+    ]
+
+    for key, value in env.items():
+        cmd.append("-e")
+        cmd.append(f"{key}={value}")
+
+    cmd.append("maibornwolff/secobserve-scanners:latest")
+
+    subprocess.run(cmd)
+
+    # Run Grype
+    print(f"Scanning {env['TARGET']} with Grype")
+
+    env["FURTHER_PARAMETERS"] = "--by-cve"
+    env["GRYPE_DB_CACHE_DIR"] = "/tmp"
+    env["REPORT_NAME"] = "grype.json"
+
+    cmd = [
+        "docker",
+        "run",
+        "--entrypoint",
+        "/entrypoints/entrypoint_grype_image.sh",
+        "-v",
+        "/tmp/stackable:/tmp",
+        "-v",
+        "/var/run/docker.sock:/var/run/docker.sock",
+    ]
+
+    for key, value in env.items():
+        cmd.append("-e")
+        cmd.append(f"{key}={value}")
+
+    cmd.append("maibornwolff/secobserve-scanners:latest")
+
+    subprocess.run(cmd)
 
 if __name__ == "__main__":
     main()
