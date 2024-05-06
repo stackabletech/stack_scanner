@@ -1,0 +1,31 @@
+name: Scan single image
+on:
+  workflow_dispatch:
+    inputs:
+      product_name:
+        description: 'Product name in SecObserve (example: hbase)'
+        required: true
+      product_version:
+        description: 'Product version in SecObserve (example: 2.4.17-stackable24.3.0)'
+        required: true
+      image:
+        description: 'Location of the image (example: oci.stackable.tech/sdp/hbase:2.4.17-stackable24.3.0)'
+        required: true
+
+jobs:
+  scan_image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+      - name: Run image
+        uses: abatilo/actions-poetry@v2
+        with:
+          poetry-version: 1.7.1
+      - name: Install deps
+        run: poetry install
+      - name: Scan image
+        id: scan
+        run: poetry run python stack_scanner/main.py scan-image ${{ secrets.SECOBSERVE_API_TOKEN }} ${{ github.event.inputs.image }} ${{ github.event.inputs.product_name }} ${{ github.event.inputs.product_version }}

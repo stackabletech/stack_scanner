@@ -26,4 +26,4 @@ jobs:
         run: poetry install
       - name: Scan all images of the release
         id: scan
-        run: poetry run python stack_scanner/main.py ${{ matrix.release }} ${{ secrets.SECOBSERVE_API_TOKEN }}
+        run: poetry run python stack_scanner/main.py scan-release ${{ secrets.SECOBSERVE_API_TOKEN }} ${{ matrix.release }}
