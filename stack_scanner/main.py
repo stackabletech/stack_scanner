@@ -32,8 +32,6 @@ def main():
     os.system("rm -rf /tmp/stackable/*")
 
     with tempfile.TemporaryDirectory() as tempdir:
-        # dump argv to console
-        print(sys.argv)
         if sys.argv[1] == "scan-image":
             secobserve_api_token = sys.argv[2]
             image = sys.argv[3]
@@ -85,37 +83,38 @@ def main():
                 "zookeeper",
             ]
 
-            for operator_name in operators:
-                product_name = f"{operator_name}-operator"
-                scan_image(secobserve_api_token, f"{REGISTRY_URL}/stackable/{product_name}:{release}", product_name, release)
+            for arch in ["amd64", "arm64"]:
+                for operator_name in operators:
+                    product_name = f"{operator_name}-operator"
+                    scan_image(secobserve_api_token, f"{REGISTRY_URL}/stackable/{product_name}:{release}-{arch}", product_name, release)
 
-            # Free up space after scanning operators
-            os.system("docker system prune -f")
-            os.system('docker system prune -f -a --filter="label=vendor=Stackable GmbH"')
-
-            # Load product versions from that file using the image-tools functionality
-            product_versions = load_configuration(filename)
-
-            for product in product_versions.products:
-                product_name: str = product["name"]
-
-                if product_name in excluded_products:
-                    continue
-                for version_dict in product.get("versions", []):
-                    version: str = version_dict["product"]
-                    product_version = f"{version}-stackable{release}"
-                    scan_image(
-                        secobserve_api_token,
-                        f"{REGISTRY_URL}/stackable/{product_name}:{product_version}",
-                        product_name,
-                        product_version,
-                    )
-
-                # Free up space after each product scan
+                # Free up space after scanning operators
                 os.system("docker system prune -f")
-                os.system(
-                    'docker system prune -f -a --filter="label=vendor=Stackable GmbH"'
-                )
+                os.system('docker system prune -f -a --filter="label=vendor=Stackable GmbH"')
+
+                # Load product versions from that file using the image-tools functionality
+                product_versions = load_configuration(filename)
+
+                for product in product_versions.products:
+                    product_name: str = product["name"]
+
+                    if product_name in excluded_products:
+                        continue
+                    for version_dict in product.get("versions", []):
+                        version: str = version_dict["product"]
+                        product_version = f"{version}-stackable{release}"
+                        scan_image(
+                            secobserve_api_token,
+                            f"{REGISTRY_URL}/stackable/{product_name}:{product_version}-{arch}",
+                            product_name,
+                            product_version,
+                        )
+
+                    # Free up space after each product scan
+                    os.system("docker system prune -f")
+                    os.system(
+                        'docker system prune -f -a --filter="label=vendor=Stackable GmbH"'
+                    )
 
 
 def scan_image(secobserve_api_token: str, image: str, product_name: str, product_version: str) -> None:

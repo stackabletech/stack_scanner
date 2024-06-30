@@ -12,7 +12,7 @@ jobs:
       max-parallel: 2
       fail-fast: false
       matrix:
-        release: ['0.0.0-dev', '24.3.0']
+        release: ['0.0.0-dev']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
