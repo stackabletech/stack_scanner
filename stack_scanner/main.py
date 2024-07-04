@@ -44,27 +44,11 @@ def main():
         else:
             secobserve_api_token = sys.argv[2]
             release = sys.argv[3]
-            # Create a file in the temp dir and download the conf.py from the git tag referring to that version
-            filename = os.path.join(tempdir, f"products-{release}.py")
-            branch = release
+            checkout = "tags/" + release
             if release == "0.0.0-dev":
-                branch = "main"
-            url = f"https://raw.githubusercontent.com/stackabletech/docker-images/{branch}/conf.py"
-            oldurl = f"https://raw.githubusercontent.com/stackabletech/docker-images/{branch}/image_tools/conf.py"
-            print(
-                f"Loading product config for version [{release}] from [{url}] (via file [{filename}]"
-            )
-            try:
-                urlretrieve(url, filename)
-            except:
-                print(
-                    f"Got 404 for release file, falling back to old file location [{oldurl}]"
-                )
-                try:
-                    urlretrieve(oldurl, filename)
-                except:
-                    print(f"Unable to retrieve config file for release [{release}]")
-                    sys.exit(1)
+                checkout = "main"
+
+            os.system("bash -c 'cd docker-images && git fetch --all && git checkout " + checkout + " && git pull && cd ..'")
 
             operators = [
                 "airflow",
@@ -94,7 +78,8 @@ def main():
             os.system('docker system prune -f -a --filter="label=vendor=Stackable GmbH"')
 
             # Load product versions from that file using the image-tools functionality
-            product_versions = load_configuration(filename)
+            sys.path.append("docker-images")
+            product_versions = load_configuration("docker-images/conf.py")
 
             for product in product_versions.products:
                 product_name: str = product["name"]
