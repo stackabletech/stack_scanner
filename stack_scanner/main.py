@@ -73,10 +73,6 @@ def main():
                 product_name = f"{operator_name}-operator"
                 scan_image(secobserve_api_token, f"{REGISTRY_URL}/stackable/{product_name}:{release}", product_name, release)
 
-            # Free up space after scanning operators
-            os.system("docker system prune -f")
-            os.system('docker system prune -f -a --filter="label=vendor=Stackable GmbH"')
-
             # Load product versions from that file using the image-tools functionality
             sys.path.append("docker-images")
             product_versions = load_configuration("docker-images/conf.py")
@@ -95,12 +91,6 @@ def main():
                         product_name,
                         product_version,
                     )
-
-                # Free up space after each product scan
-                os.system("docker system prune -f")
-                os.system(
-                    'docker system prune -f -a --filter="label=vendor=Stackable GmbH"'
-                )
 
 
 def scan_image(secobserve_api_token: str, image: str, product_name: str, product_version: str) -> None:
