@@ -4,6 +4,8 @@ import tempfile
 import os
 import subprocess
 import sys
+import json
+import base64
 
 excluded_products = [
     "hello-world",
@@ -12,7 +14,12 @@ excluded_products = [
     "stackable-base",
     "trino-cli",
     "vector",
+    "tools",
     "omid",
+    "kcat",
+    "kafka-testing-tools",
+    "java-devel",
+    "statsd_exporter"
 ]
 
 REGISTRY_URL = "docker.stackable.tech"
@@ -28,8 +35,10 @@ def main():
         )
         sys.exit(1)
 
-    os.makedirs("/tmp/stackable", exist_ok=True)
     os.system("rm -rf /tmp/stackable/*")
+    os.makedirs("/tmp/stackable/trivy_tmp", exist_ok=True)
+    os.makedirs("/tmp/stackable/trivy_cache", exist_ok=True)
+    os.makedirs("/tmp/stackable/grype_db_cache", exist_ok=True)
 
     with tempfile.TemporaryDirectory() as tempdir:
         # dump argv to console
@@ -69,49 +78,69 @@ def main():
                 "zookeeper",
             ]
 
-            for operator_name in operators:
-                product_name = f"{operator_name}-operator"
-                scan_image(secobserve_api_token, f"{REGISTRY_URL}/stackable/{product_name}:{release}", product_name, release)
+            for arch in ["amd64", "arm64"]:
+                for operator_name in operators:
+                    product_name = f"{operator_name}-operator"
+                    scan_image(secobserve_api_token, f"{REGISTRY_URL}/stackable/{product_name}:{release}-{arch}", product_name, release)
 
-            # Load product versions from that file using the image-tools functionality
-            sys.path.append("docker-images")
-            product_versions = load_configuration("docker-images/conf.py")
+                # Load product versions from that file using the image-tools functionality
+                sys.path.append("docker-images")
+                product_versions = load_configuration("docker-images/conf.py")
 
-            for product in product_versions.products:
-                product_name: str = product["name"]
+                for product in product_versions.products:
+                    product_name: str = product["name"]
 
-                if product_name in excluded_products:
-                    continue
-                for version_dict in product.get("versions", []):
-                    version: str = version_dict["product"]
-                    product_version = f"{version}-stackable{release}"
-                    scan_image(
-                        secobserve_api_token,
-                        f"{REGISTRY_URL}/stackable/{product_name}:{product_version}",
-                        product_name,
-                        product_version,
-                    )
+                    if product_name in excluded_products:
+                        continue
+                    for version_dict in product.get("versions", []):
+                        version: str = version_dict["product"]
+                        product_version = f"{version}-stackable{release}"
+                        scan_image(
+                            secobserve_api_token,
+                            f"{REGISTRY_URL}/stackable/{product_name}:{product_version}-{arch}",
+                            product_name,
+                            product_version,
+                        )
 
 
 def scan_image(secobserve_api_token: str, image: str, product_name: str, product_version: str) -> None:
+    extract_sbom_cmd = [
+        "cosign",
+        "verify-attestation",
+        "--type",
+        "cyclonedx",
+        "--certificate-identity-regexp",
+        "^https://github.com/stackabletech/.+/.github/workflows/.+@.+",
+        "--certificate-oidc-issuer",
+        "https://token.actions.githubusercontent.com",
+        image.replace("docker.stackable.tech/stackable/", "oci.stackable.tech/sdp/"),
+    ];
+    print(" ".join(extract_sbom_cmd))
+
+    result = subprocess.run(extract_sbom_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    cosign_output = json.loads(result.stdout.decode('utf-8'))
+    payload = base64.b64decode(cosign_output["payload"]).decode('utf-8')
+    sbom = json.loads(payload)["predicate"]
+    with open("/tmp/stackable/bom.json", "w") as f:
+        json.dump(sbom, f)
+
     # Run Trivy
     env = {}
-    env["TARGET"] = image
+    env["TARGET"] = "/tmp/bom.json"
     env["SO_UPLOAD"] = "true"
     env["SO_PRODUCT_NAME"] = product_name
     env["SO_API_BASE_URL"] = "https://secobserve-backend.stackable.tech"
     env["SO_API_TOKEN"] = secobserve_api_token
     env["SO_BRANCH_NAME"] = product_version
-    env["TMPDIR"] = "/tmp"
+    env["TMPDIR"] = "/tmp/trivy_tmp"
+    env["TRIVY_CACHE_DIR"] = "/tmp/trivy_cache"
     env["REPORT_NAME"] = "trivy.json"
-
-    print(f"Scanning {env['TARGET']} with Trivy")
 
     cmd = [
         "docker",
         "run",
         "--entrypoint",
-        "/entrypoints/entrypoint_trivy_image.sh",
+        "/entrypoints/entrypoint_trivy_sbom.sh",
         "-v",
         "/tmp/stackable:/tmp",
         "-v",
@@ -122,22 +151,21 @@ def scan_image(secobserve_api_token: str, image: str, product_name: str, product
         cmd.append("-e")
         cmd.append(f"{key}={value}")
 
-    cmd.append("maibornwolff/secobserve-scanners:latest")
+    cmd.append("oci.stackable.tech/sandbox/secobserve-scanners:latest")
 
+    print(" ".join(cmd))
     subprocess.run(cmd)
 
     # Run Grype
-    print(f"Scanning {env['TARGET']} with Grype")
-
     env["FURTHER_PARAMETERS"] = "--by-cve"
-    env["GRYPE_DB_CACHE_DIR"] = "/tmp"
+    env["GRYPE_DB_CACHE_DIR"] = "/tmp/grype_db_cache"
     env["REPORT_NAME"] = "grype.json"
 
     cmd = [
         "docker",
         "run",
         "--entrypoint",
-        "/entrypoints/entrypoint_grype_image.sh",
+        "/entrypoints/entrypoint_grype_sbom.sh",
         "-v",
         "/tmp/stackable:/tmp",
         "-v",
@@ -148,7 +176,7 @@ def scan_image(secobserve_api_token: str, image: str, product_name: str, product
         cmd.append("-e")
         cmd.append(f"{key}={value}")
 
-    cmd.append("maibornwolff/secobserve-scanners:latest")
+    cmd.append("oci.stackable.tech/sandbox/secobserve-scanners:latest")
 
     subprocess.run(cmd)
 
