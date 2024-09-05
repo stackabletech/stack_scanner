@@ -104,6 +104,7 @@ def main():
 
 
 def scan_image(secobserve_api_token: str, image: str, product_name: str, product_version: str) -> None:
+    mode = "sbom"
     extract_sbom_cmd = [
         "cosign",
         "verify-attestation",
@@ -118,15 +119,19 @@ def scan_image(secobserve_api_token: str, image: str, product_name: str, product
     print(" ".join(extract_sbom_cmd))
 
     result = subprocess.run(extract_sbom_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    cosign_output = json.loads(result.stdout.decode('utf-8'))
-    payload = base64.b64decode(cosign_output["payload"]).decode('utf-8')
-    sbom = json.loads(payload)["predicate"]
-    with open("/tmp/stackable/bom.json", "w") as f:
-        json.dump(sbom, f)
+    if result.returncode == 0:
+        cosign_output = json.loads(result.stdout.decode('utf-8'))
+        payload = base64.b64decode(cosign_output["payload"]).decode('utf-8')
+        sbom = json.loads(payload)["predicate"]
+        with open("/tmp/stackable/bom.json", "w") as f:
+            json.dump(sbom, f)
+    else:
+        print("No SBOM found, falling back to image mode")
+        mode = "image" # fallback to image mode if no SBOM is available
 
     # Run Trivy
     env = {}
-    env["TARGET"] = "/tmp/bom.json"
+    env["TARGET"] = image if mode == "image" else "/tmp/bom.json"
     env["SO_UPLOAD"] = "true"
     env["SO_PRODUCT_NAME"] = product_name
     env["SO_API_BASE_URL"] = "https://secobserve-backend.stackable.tech"
@@ -140,7 +145,7 @@ def scan_image(secobserve_api_token: str, image: str, product_name: str, product
         "docker",
         "run",
         "--entrypoint",
-        "/entrypoints/entrypoint_trivy_sbom.sh",
+        "/entrypoints/entrypoint_trivy_"+mode+".sh",
         "-v",
         "/tmp/stackable:/tmp",
         "-v",
@@ -165,7 +170,7 @@ def scan_image(secobserve_api_token: str, image: str, product_name: str, product
         "docker",
         "run",
         "--entrypoint",
-        "/entrypoints/entrypoint_grype_sbom.sh",
+        "/entrypoints/entrypoint_grype_"+mode+".sh",
         "-v",
         "/tmp/stackable:/tmp",
         "-v",
