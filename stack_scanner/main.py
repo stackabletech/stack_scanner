@@ -129,7 +129,7 @@ def scan_image(secobserve_api_token: str, image: str, product_name: str, product
         print("No SBOM found, falling back to image mode")
         mode = "image" # fallback to image mode if no SBOM is available
 
-    # Run Trivy
+    # Run Grype
     env = {}
     env["TARGET"] = image if mode == "image" else "/tmp/bom.json"
     env["SO_UPLOAD"] = "true"
@@ -137,15 +137,15 @@ def scan_image(secobserve_api_token: str, image: str, product_name: str, product
     env["SO_API_BASE_URL"] = "https://secobserve-backend.stackable.tech"
     env["SO_API_TOKEN"] = secobserve_api_token
     env["SO_BRANCH_NAME"] = product_version
-    env["TMPDIR"] = "/tmp/trivy_tmp"
-    env["TRIVY_CACHE_DIR"] = "/tmp/trivy_cache"
-    env["REPORT_NAME"] = "trivy.json"
+    env["FURTHER_PARAMETERS"] = "--by-cve"
+    env["GRYPE_DB_CACHE_DIR"] = "/tmp/grype_db_cache"
+    env["REPORT_NAME"] = "grype.json"
 
     cmd = [
         "docker",
         "run",
         "--entrypoint",
-        "/entrypoints/entrypoint_trivy_"+mode+".sh",
+        "/entrypoints/entrypoint_grype_"+mode+".sh",
         "-v",
         "/tmp/stackable:/tmp",
         "-v",
@@ -158,19 +158,19 @@ def scan_image(secobserve_api_token: str, image: str, product_name: str, product
 
     cmd.append("oci.stackable.tech/sandbox/secobserve-scanners:latest")
 
-    print(" ".join(cmd))
     subprocess.run(cmd)
 
-    # Run Grype
-    env["FURTHER_PARAMETERS"] = "--by-cve"
-    env["GRYPE_DB_CACHE_DIR"] = "/tmp/grype_db_cache"
-    env["REPORT_NAME"] = "grype.json"
+    # Run Trivy
+    env["TMPDIR"] = "/tmp/trivy_tmp"
+    env["FURTHER_PARAMETERS"] = ""
+    env["TRIVY_CACHE_DIR"] = "/tmp/trivy_cache"
+    env["REPORT_NAME"] = "trivy.json"
 
     cmd = [
         "docker",
         "run",
         "--entrypoint",
-        "/entrypoints/entrypoint_grype_"+mode+".sh",
+        "/entrypoints/entrypoint_trivy_"+mode+".sh",
         "-v",
         "/tmp/stackable:/tmp",
         "-v",
