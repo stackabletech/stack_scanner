@@ -6,10 +6,10 @@ on:
         description: 'Product name in SecObserve (example: hbase)'
         required: true
       product_version:
-        description: 'Product version in SecObserve (example: 2.4.17-stackable24.3.0)'
+        description: 'Product version in SecObserve (example: 2.4.17-stackable24.7.0-amd64)'
         required: true
       image:
-        description: 'Location of the image (example: oci.stackable.tech/sdp/hbase:2.4.17-stackable24.3.0)'
+        description: 'Location of the image (example: oci.stackable.tech/sdp/hbase:2.4.17-stackable24.7.0-amd64)'
         required: true
 
 jobs:

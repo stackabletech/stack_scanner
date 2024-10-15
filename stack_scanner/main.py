@@ -19,7 +19,7 @@ excluded_products = [
     "kcat",
     "kafka-testing-tools",
     "java-devel",
-    "statsd_exporter"
+    "statsd_exporter",
 ]
 
 REGISTRY_URL = "docker.stackable.tech"
@@ -47,8 +47,8 @@ def main():
             secobserve_api_token = sys.argv[2]
             image = sys.argv[3]
             product_name = sys.argv[4]
-            product_version = sys.argv[5]
-            scan_image(secobserve_api_token, image, product_name, product_version)
+            product_version, arch = sys.argv[5].split("-")
+            scan_image(secobserve_api_token, image, product_name, product_version, arch)
             sys.exit(0)
         else:
             secobserve_api_token = sys.argv[2]
@@ -57,7 +57,11 @@ def main():
             if release == "0.0.0-dev":
                 checkout = "main"
 
-            os.system("bash -c 'cd docker-images && git fetch --all && git checkout " + checkout + " && git pull && cd ..'")
+            os.system(
+                "bash -c 'cd docker-images && git fetch --all && git checkout "
+                + checkout
+                + " && git pull && cd ..'"
+            )
 
             operators = [
                 "airflow",
@@ -81,7 +85,13 @@ def main():
             for arch in ["amd64", "arm64"]:
                 for operator_name in operators:
                     product_name = f"{operator_name}-operator"
-                    scan_image(secobserve_api_token, f"{REGISTRY_URL}/stackable/{product_name}:{release}-{arch}", product_name, release)
+                    scan_image(
+                        secobserve_api_token,
+                        f"{REGISTRY_URL}/stackable/{product_name}:{release}-{arch}",
+                        product_name,
+                        release,
+                        arch,
+                    )
 
                 # Load product versions from that file using the image-tools functionality
                 sys.path.append("docker-images")
@@ -100,10 +110,17 @@ def main():
                             f"{REGISTRY_URL}/stackable/{product_name}:{product_version}-{arch}",
                             product_name,
                             product_version,
+                            arch,
                         )
 
 
-def scan_image(secobserve_api_token: str, image: str, product_name: str, product_version: str) -> None:
+def scan_image(
+    secobserve_api_token: str,
+    image: str,
+    product_name: str,
+    product_version: str,
+    architecture: str,
+) -> None:
     mode = "sbom"
     extract_sbom_cmd = [
         "cosign",
@@ -115,19 +132,21 @@ def scan_image(secobserve_api_token: str, image: str, product_name: str, product
         "--certificate-oidc-issuer",
         "https://token.actions.githubusercontent.com",
         image.replace("docker.stackable.tech/stackable/", "oci.stackable.tech/sdp/"),
-    ];
+    ]
     print(" ".join(extract_sbom_cmd))
 
-    result = subprocess.run(extract_sbom_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    result = subprocess.run(
+        extract_sbom_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
     if result.returncode == 0:
-        cosign_output = json.loads(result.stdout.decode('utf-8'))
-        payload = base64.b64decode(cosign_output["payload"]).decode('utf-8')
+        cosign_output = json.loads(result.stdout.decode("utf-8"))
+        payload = base64.b64decode(cosign_output["payload"]).decode("utf-8")
         sbom = json.loads(payload)["predicate"]
         with open("/tmp/stackable/bom.json", "w") as f:
             json.dump(sbom, f)
     else:
         print("No SBOM found, falling back to image mode")
-        mode = "image" # fallback to image mode if no SBOM is available
+        mode = "image"  # fallback to image mode if no SBOM is available
 
     # Run Trivy
     env = {}
@@ -136,7 +155,7 @@ def scan_image(secobserve_api_token: str, image: str, product_name: str, product
     env["SO_PRODUCT_NAME"] = product_name
     env["SO_API_BASE_URL"] = "https://secobserve-backend.stackable.tech"
     env["SO_API_TOKEN"] = secobserve_api_token
-    env["SO_BRANCH_NAME"] = product_version
+    env["SO_BRANCH_NAME"] = product_version + "-" + architecture
     env["TMPDIR"] = "/tmp/trivy_tmp"
     env["TRIVY_CACHE_DIR"] = "/tmp/trivy_cache"
     env["REPORT_NAME"] = "trivy.json"
@@ -145,7 +164,7 @@ def scan_image(secobserve_api_token: str, image: str, product_name: str, product
         "docker",
         "run",
         "--entrypoint",
-        "/entrypoints/entrypoint_trivy_"+mode+".sh",
+        "/entrypoints/entrypoint_trivy_" + mode + ".sh",
         "-v",
         "/tmp/stackable:/tmp",
         "-v",
@@ -170,7 +189,7 @@ def scan_image(secobserve_api_token: str, image: str, product_name: str, product
         "docker",
         "run",
         "--entrypoint",
-        "/entrypoints/entrypoint_grype_"+mode+".sh",
+        "/entrypoints/entrypoint_grype_" + mode + ".sh",
         "-v",
         "/tmp/stackable:/tmp",
         "-v",
