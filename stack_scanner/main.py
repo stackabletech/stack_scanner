@@ -142,6 +142,12 @@ def scan_image(
         cosign_output = json.loads(result.stdout.decode("utf-8"))
         payload = base64.b64decode(cosign_output["payload"]).decode("utf-8")
         sbom = json.loads(payload)["predicate"]
+
+        # Required workaround for Trivy to recognize the OS
+        for component in sbom.get("components", []):
+            if component.get("type") == "operating-system" and component.get("name") == "rhel":
+                component["name"] = "redhat"
+
         with open("/tmp/stackable/bom.json", "w") as f:
             json.dump(sbom, f)
     else:
