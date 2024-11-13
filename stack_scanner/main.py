@@ -47,8 +47,7 @@ def main():
             secobserve_api_token = sys.argv[2]
             image = sys.argv[3]
             product_name = sys.argv[4]
-            product_version, arch = sys.argv[5].split("-")
-            scan_image(secobserve_api_token, image, product_name, product_version, arch)
+            scan_image(secobserve_api_token, image, product_name, sys.argv[5])
             sys.exit(0)
         else:
             secobserve_api_token = sys.argv[2]
@@ -89,8 +88,7 @@ def main():
                         secobserve_api_token,
                         f"{REGISTRY_URL}/stackable/{product_name}:{release}-{arch}",
                         product_name,
-                        release,
-                        arch,
+                        f"{release}-{arch}",
                     )
 
                 # Load product versions from that file using the image-tools functionality
@@ -109,8 +107,7 @@ def main():
                             secobserve_api_token,
                             f"{REGISTRY_URL}/stackable/{product_name}:{product_version}-{arch}",
                             product_name,
-                            product_version,
-                            arch,
+                            f"{product_version}-{arch}",
                         )
 
 
@@ -118,8 +115,7 @@ def scan_image(
     secobserve_api_token: str,
     image: str,
     product_name: str,
-    product_version: str,
-    architecture: str,
+    branch_name: str,
 ) -> None:
     mode = "sbom"
     extract_sbom_cmd = [
@@ -161,7 +157,7 @@ def scan_image(
     env["SO_PRODUCT_NAME"] = product_name
     env["SO_API_BASE_URL"] = "https://secobserve-backend.stackable.tech"
     env["SO_API_TOKEN"] = secobserve_api_token
-    env["SO_BRANCH_NAME"] = product_version + "-" + architecture
+    env["SO_BRANCH_NAME"] = branch_name
     env["TMPDIR"] = "/tmp/trivy_tmp"
     env["TRIVY_CACHE_DIR"] = "/tmp/trivy_cache"
     env["REPORT_NAME"] = "trivy.json"
