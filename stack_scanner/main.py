@@ -182,31 +182,29 @@ def scan_image(
     print(" ".join(cmd))
     subprocess.run(cmd)
 
-    # Disabled Grype on 2024-11-13: Grype generates it's own package-ids in Purls, which results in problem with component matching
-    # This causes "Observation not found in latest scan" messages in SecObserve, which are false positives
     # Run Grype
-    # env["FURTHER_PARAMETERS"] = "--by-cve"
-    # env["GRYPE_DB_CACHE_DIR"] = "/tmp/grype_db_cache"
-    # env["REPORT_NAME"] = "grype.json"
+    env["FURTHER_PARAMETERS"] = "--by-cve"
+    env["GRYPE_DB_CACHE_DIR"] = "/tmp/grype_db_cache"
+    env["REPORT_NAME"] = "grype.json"
 
-    # cmd = [
-    #     "docker",
-    #     "run",
-    #     "--entrypoint",
-    #     "/entrypoints/entrypoint_grype_" + mode + ".sh",
-    #     "-v",
-    #     "/tmp/stackable:/tmp",
-    #     "-v",
-    #     "/var/run/docker.sock:/var/run/docker.sock",
-    # ]
+    cmd = [
+        "docker",
+        "run",
+        "--entrypoint",
+        "/entrypoints/entrypoint_grype_" + mode + ".sh",
+        "-v",
+        "/tmp/stackable:/tmp",
+        "-v",
+        "/var/run/docker.sock:/var/run/docker.sock",
+    ]
 
-    # for key, value in env.items():
-    #     cmd.append("-e")
-    #     cmd.append(f"{key}={value}")
+    for key, value in env.items():
+        cmd.append("-e")
+        cmd.append(f"{key}={value}")
 
-    # cmd.append("oci.stackable.tech/sandbox/secobserve-scanners:latest")
+    cmd.append("oci.stackable.tech/sandbox/secobserve-scanners:latest")
 
-    # subprocess.run(cmd)
+    subprocess.run(cmd)
 
 
 if __name__ == "__main__":
