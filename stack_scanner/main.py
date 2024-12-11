@@ -14,7 +14,6 @@ excluded_products = [
     "stackable-base",
     "trino-cli",
     "vector",
-    "tools",
     "omid",
     "kcat",
     "kafka-testing-tools",
