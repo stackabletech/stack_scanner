@@ -72,6 +72,7 @@ def main():
                 "listener",
                 "nifi",
                 "opa",
+                "opensearch",
                 "secret",
                 "spark-k8s",
                 "superset",

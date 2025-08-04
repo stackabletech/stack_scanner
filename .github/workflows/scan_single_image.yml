@@ -9,7 +9,7 @@ on:
         description: 'Product version in SecObserve (example: 2.4.17-stackable24.7.0-amd64)'
         required: true
       image:
-        description: 'Location of the image (example: oci.stackable.tech/sdp/hbase:2.4.17-stackable24.7.0-amd64)'
+        description: "Location of the image (example: oci.stackable.tech/sdp/hbase:2.4.17-stackable24.7.0-amd64). Please use the tag for the image itself (usually one including the CPU architecture) and not the tag for the manifest list, since the tag for the manifest list won't have an SBOM attached."
         required: true
 
 jobs:
