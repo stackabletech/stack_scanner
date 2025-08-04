@@ -20,7 +20,7 @@ excluded_products = [
     "statsd_exporter",
 ]
 
-REGISTRY_URL = "docker.stackable.tech"
+REGISTRY_URL = "oci.stackable.tech"
 
 
 def main():
@@ -104,7 +104,7 @@ def main():
                         product_version = f"{version}-stackable{release}"
                         scan_image(
                             secobserve_api_token,
-                            f"{REGISTRY_URL}/stackable/{product_name}:{product_version}-{arch}",
+                            f"{REGISTRY_URL}/sdp/{product_name}:{product_version}-{arch}",
                             product_name,
                             f"{product_version}-{arch}",
                         )
@@ -126,7 +126,7 @@ def scan_image(
         "^https://github.com/stackabletech/.+/.github/workflows/.+@.+",
         "--certificate-oidc-issuer",
         "https://token.actions.githubusercontent.com",
-        image.replace("docker.stackable.tech/stackable/", "oci.stackable.tech/sdp/"),
+        image,
     ]
     print(" ".join(extract_sbom_cmd))
 
