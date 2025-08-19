@@ -85,7 +85,7 @@ def main():
                     product_name = f"{operator_name}-operator"
                     scan_image(
                         secobserve_api_token,
-                        f"{REGISTRY_URL}/stackable/{product_name}:{release}-{arch}",
+                        f"{REGISTRY_URL}/sdp/{product_name}:{release}-{arch}",
                         product_name,
                         f"{release}-{arch}",
                     )
