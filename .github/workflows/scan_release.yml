@@ -1,0 +1,30 @@
+name: Scan specific release
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Release version to scan'
+        required: true
+        default: '0.0.0-dev'
+
+jobs:
+  scan_release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Init submodules
+        run: git submodule update --init --recursive
+      - name: Set up Cosign
+        uses: sigstore/cosign-installer@59acb6260d9c0ba8f4a2f9d9b48431a222b68e20 # v3.5.0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+      - name: Run image
+        uses: abatilo/actions-poetry@v2
+        with:
+          poetry-version: 1.7.1
+      - name: Install deps
+        run: poetry install
+      - name: Scan release
+        id: scan
+        run: poetry run python stack_scanner/main.py scan-release ${{ secrets.SECOBSERVE_API_TOKEN }} ${{ github.event.inputs.release }}
