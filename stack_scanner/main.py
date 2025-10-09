@@ -88,29 +88,53 @@ def main():
                         f"{release}-{arch}",
                     )
 
-                # Load product versions using boil
-                result = subprocess.run(
-                    ["cargo", "boil", "show", "images"],
-                    cwd="docker-images",
-                    capture_output=True,
-                    text=True,
-                )
-                if result.returncode != 0:
-                    print("Failed to get product versions:", result.stderr)
-                    sys.exit(1)
-                product_versions = json.loads(result.stdout)
+                # Check if conf.py exists (old format) or use boil (new format)
+                conf_py_path = "docker-images/conf.py"
+                if os.path.exists(conf_py_path):
+                    # Use old conf.py based approach
+                    print("Using conf.py based configuration")
+                    from image_tools.args import load_configuration
+                    sys.path.append("docker-images")
+                    product_versions_config = load_configuration(conf_py_path)
 
-                for product_name, versions in product_versions.items():
-                    if product_name in excluded_products:
-                        continue
-                    for version in versions:
-                        product_version = f"{version}-stackable{release}"
-                        scan_image(
-                            secobserve_api_token,
-                            f"{REGISTRY_URL}/sdp/{product_name}:{product_version}-{arch}",
-                            product_name,
-                            f"{product_version}-{arch}",
-                        )
+                    for product in product_versions_config.products:
+                        product_name: str = product["name"]
+                        if product_name in excluded_products:
+                            continue
+                        for version_dict in product.get("versions", []):
+                            version: str = version_dict["product"]
+                            product_version = f"{version}-stackable{release}"
+                            scan_image(
+                                secobserve_api_token,
+                                f"{REGISTRY_URL}/sdp/{product_name}:{product_version}-{arch}",
+                                product_name,
+                                f"{product_version}-{arch}",
+                            )
+                else:
+                    # Use new boil based approach
+                    print("Using boil based configuration")
+                    result = subprocess.run(
+                        ["cargo", "boil", "show", "images"],
+                        cwd="docker-images",
+                        capture_output=True,
+                        text=True,
+                    )
+                    if result.returncode != 0:
+                        print("Failed to get product versions:", result.stderr)
+                        sys.exit(1)
+                    product_versions = json.loads(result.stdout)
+
+                    for product_name, versions in product_versions.items():
+                        if product_name in excluded_products:
+                            continue
+                        for version in versions:
+                            product_version = f"{version}-stackable{release}"
+                            scan_image(
+                                secobserve_api_token,
+                                f"{REGISTRY_URL}/sdp/{product_name}:{product_version}-{arch}",
+                                product_name,
+                                f"{product_version}-{arch}",
+                            )
 
 
 def scan_image(
