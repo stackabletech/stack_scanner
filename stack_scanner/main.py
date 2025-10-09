@@ -1,5 +1,3 @@
-from urllib.request import urlretrieve
-from image_tools.args import load_configuration
 import tempfile
 import os
 import subprocess
@@ -90,17 +88,22 @@ def main():
                         f"{release}-{arch}",
                     )
 
-                # Load product versions from that file using the image-tools functionality
-                sys.path.append("docker-images")
-                product_versions = load_configuration("docker-images/conf.py")
+                # Load product versions using boil
+                result = subprocess.run(
+                    ["cargo", "boil", "show", "images"],
+                    cwd="docker-images",
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0:
+                    print("Failed to get product versions:", result.stderr)
+                    sys.exit(1)
+                product_versions = json.loads(result.stdout)
 
-                for product in product_versions.products:
-                    product_name: str = product["name"]
-
+                for product_name, versions in product_versions.items():
                     if product_name in excluded_products:
                         continue
-                    for version_dict in product.get("versions", []):
-                        version: str = version_dict["product"]
+                    for version in versions:
                         product_version = f"{version}-stackable{release}"
                         scan_image(
                             secobserve_api_token,
