@@ -1,6 +1,6 @@
 import datetime
-import tempfile
 import os
+import shutil
 import subprocess
 import sys
 import json
@@ -25,6 +25,8 @@ excluded_products = [
 REGISTRY_URL = "oci.stackable.tech"
 HARBOR_API_BASE = f"https://{REGISTRY_URL}/api/v2.0"
 MAX_AGE_DAYS = 180
+SECOBSERVE_API_BASE_URL = "https://secobserve-backend.stackable.tech"
+SECOBSERVE_SCANNER_IMAGE = "ghcr.io/secobserve/secobserve-scanners:2026_02"
 
 # Additional images to scan that are not part of the regular versioned release.
 # These are third-party or infrastructure images referenced by the Stackable platform.
@@ -53,7 +55,7 @@ def harbor_api_request(path: str, params: dict | None = None) -> list | dict | N
 
     try:
         with urllib.request.urlopen(request) as response:
-            return json.loads(response.read().decode())
+            return json.load(response)
     except (urllib.error.URLError, json.JSONDecodeError) as error:
         print(f"Harbor API request failed for {path}: {error}")
         return None
@@ -117,7 +119,7 @@ def get_latest_github_release(owner: str, repo: str) -> str | None:
 
     try:
         with urllib.request.urlopen(request) as response:
-            data = json.loads(response.read().decode())
+            data = json.load(response)
             return data["tag_name"]
     except (urllib.error.URLError, json.JSONDecodeError, KeyError) as error:
         print(f"Failed to fetch latest {owner}/{repo} release: {error}")
@@ -158,6 +160,32 @@ def scan_stackablectl(secobserve_api_token: str) -> None:
     scan_binary(secobserve_api_token, binary_name, "stackablectl", version)
 
 
+def _build_base_env(secobserve_api_token: str, product_name: str, branch_name: str) -> dict:
+    return {
+        "SO_UPLOAD": "true",
+        "SO_PRODUCT_NAME": product_name,
+        "SO_API_BASE_URL": SECOBSERVE_API_BASE_URL,
+        "SO_API_TOKEN": secobserve_api_token,
+        "SO_BRANCH_NAME": branch_name,
+        "TMPDIR": "/tmp/trivy_tmp",
+        "TRIVY_CACHE_DIR": "/tmp/trivy_cache",
+        "REPORT_NAME": "trivy.json",
+    }
+
+
+def _build_scanner_cmd(entrypoint: str, env: dict) -> list[str]:
+    cmd = [
+        "docker", "run",
+        "--entrypoint", entrypoint,
+        "-v", "/tmp/stackable:/tmp",
+        "-v", "/var/run/docker.sock:/var/run/docker.sock",
+    ]
+    for key, value in env.items():
+        cmd.extend(["-e", f"{key}={value}"])
+    cmd.append(SECOBSERVE_SCANNER_IMAGE)
+    return cmd
+
+
 def scan_binary(
     secobserve_api_token: str,
     file_name: str,
@@ -169,54 +197,20 @@ def scan_binary(
     The file must reside under /tmp/stackable/ so it is accessible inside the
     scanner container (which mounts that directory to /tmp).
     """
-    # Run Trivy
-    env = {}
-    env["TARGET"] = f"/tmp/{file_name}"
-    env["SO_UPLOAD"] = "true"
-    env["SO_PRODUCT_NAME"] = product_name
-    env["SO_API_BASE_URL"] = "https://secobserve-backend.stackable.tech"
-    env["SO_API_TOKEN"] = secobserve_api_token
-    env["SO_BRANCH_NAME"] = branch_name
-    env["TMPDIR"] = "/tmp/trivy_tmp"
-    env["TRIVY_CACHE_DIR"] = "/tmp/trivy_cache"
-    env["REPORT_NAME"] = "trivy.json"
+    trivy_env = _build_base_env(secobserve_api_token, product_name, branch_name)
+    trivy_env["TARGET"] = f"/tmp/{file_name}"
 
-    cmd = [
-        "docker",
-        "run",
-        "--entrypoint",
-        "/entrypoints/entrypoint_trivy_rootfs.sh",
-        "-v",
-        "/tmp/stackable:/tmp",
-        "-v",
-        "/var/run/docker.sock:/var/run/docker.sock",
-    ]
-    for key, value in env.items():
-        cmd.extend(["-e", f"{key}={value}"])
-    cmd.append("ghcr.io/secobserve/secobserve-scanners:2026_02")
-
+    cmd = _build_scanner_cmd("/entrypoints/entrypoint_trivy_rootfs.sh", trivy_env)
     print(" ".join(cmd))
     subprocess.run(cmd)
 
-    # Run Grype
-    env["FURTHER_PARAMETERS"] = "--by-cve"
-    env["GRYPE_DB_CACHE_DIR"] = "/tmp/grype_db_cache"
-    env["REPORT_NAME"] = "grype.json"
-
-    cmd = [
-        "docker",
-        "run",
-        "--entrypoint",
-        "/entrypoints/entrypoint_grype_rootfs.sh",
-        "-v",
-        "/tmp/stackable:/tmp",
-        "-v",
-        "/var/run/docker.sock:/var/run/docker.sock",
-    ]
-    for key, value in env.items():
-        cmd.extend(["-e", f"{key}={value}"])
-    cmd.append("ghcr.io/secobserve/secobserve-scanners:2026_02")
-
+    grype_env = {
+        **trivy_env,
+        "FURTHER_PARAMETERS": "--by-cve",
+        "GRYPE_DB_CACHE_DIR": "/tmp/grype_db_cache",
+        "REPORT_NAME": "grype.json",
+    }
+    cmd = _build_scanner_cmd("/entrypoints/entrypoint_grype_rootfs.sh", grype_env)
     subprocess.run(cmd)
 
 
@@ -263,117 +257,115 @@ def main():
         )
         sys.exit(1)
 
-    os.system("rm -rf /tmp/stackable/*")
+    shutil.rmtree("/tmp/stackable", ignore_errors=True)
     os.makedirs("/tmp/stackable/trivy_tmp", exist_ok=True)
     os.makedirs("/tmp/stackable/trivy_cache", exist_ok=True)
     os.makedirs("/tmp/stackable/grype_db_cache", exist_ok=True)
 
-    with tempfile.TemporaryDirectory() as tempdir:
-        # dump argv to console
-        print(sys.argv)
-        if sys.argv[1] == "scan-image":
-            secobserve_api_token = sys.argv[2]
-            image = sys.argv[3]
-            product_name = sys.argv[4]
-            scan_image(secobserve_api_token, image, product_name, sys.argv[5])
-            sys.exit(0)
+    # dump argv to console
+    print(sys.argv)
+    if sys.argv[1] == "scan-image":
+        secobserve_api_token = sys.argv[2]
+        image = sys.argv[3]
+        product_name = sys.argv[4]
+        scan_image(secobserve_api_token, image, product_name, sys.argv[5])
+        sys.exit(0)
+    else:
+        secobserve_api_token = sys.argv[2]
+        release = sys.argv[3]
+        checkout = "tags/" + release
+        if release == "0.0.0-dev":
+            checkout = "main"
+
+        subprocess.run(["git", "fetch", "--all"], cwd="docker-images")
+        subprocess.run(["git", "checkout", checkout], cwd="docker-images")
+        subprocess.run(["git", "pull"], cwd="docker-images")
+
+        operators = [
+            "airflow",
+            "commons",
+            "druid",
+            "hbase",
+            "hdfs",
+            "hive",
+            "kafka",
+            "listener",
+            "nifi",
+            "opa",
+            "opensearch",
+            "secret",
+            "spark-k8s",
+            "superset",
+            "trino",
+            "zookeeper",
+        ]
+
+        # Load product version configuration once, outside the arch loop.
+        conf_py_path = "docker-images/conf.py"
+        if os.path.exists(conf_py_path):
+            print("Using conf.py based configuration")
+            sys.path.insert(0, os.path.abspath("docker-images"))
+            from image_tools.args import load_configuration
+            product_versions_config = load_configuration(conf_py_path)
+            use_conf_py = True
         else:
-            secobserve_api_token = sys.argv[2]
-            release = sys.argv[3]
-            checkout = "tags/" + release
-            if release == "0.0.0-dev":
-                checkout = "main"
-
-            os.system(
-                "bash -c 'cd docker-images && git fetch --all && git checkout "
-                + checkout
-                + " && git pull && cd ..'"
+            print("Using boil based configuration")
+            result = subprocess.run(
+                ["cargo", "boil", "show", "images"],
+                cwd="docker-images",
+                capture_output=True,
+                text=True,
             )
+            if result.returncode != 0:
+                print("Failed to get product versions:", result.stderr)
+                sys.exit(1)
+            product_versions = json.loads(result.stdout)
+            use_conf_py = False
 
-            operators = [
-                "airflow",
-                "commons",
-                "druid",
-                "hbase",
-                "hdfs",
-                "hive",
-                "kafka",
-                "listener",
-                "nifi",
-                "opa",
-                "opensearch",
-                "secret",
-                "spark-k8s",
-                "superset",
-                "trino",
-                "zookeeper",
-            ]
+        for arch in ["amd64", "arm64"]:
+            for operator_name in operators:
+                product_name = f"{operator_name}-operator"
+                scan_image(
+                    secobserve_api_token,
+                    f"{REGISTRY_URL}/sdp/{product_name}:{release}-{arch}",
+                    product_name,
+                    f"{release}-{arch}",
+                )
 
-            for arch in ["amd64", "arm64"]:
-                for operator_name in operators:
-                    product_name = f"{operator_name}-operator"
-                    scan_image(
-                        secobserve_api_token,
-                        f"{REGISTRY_URL}/sdp/{product_name}:{release}-{arch}",
-                        product_name,
-                        f"{release}-{arch}",
-                    )
+            if use_conf_py:
+                for product in product_versions_config.products:
+                    product_name: str = product["name"]
+                    if product_name in excluded_products:
+                        continue
+                    for version_dict in product.get("versions", []):
+                        version: str = version_dict["product"]
+                        product_version = f"{version}-stackable{release}"
+                        scan_image(
+                            secobserve_api_token,
+                            f"{REGISTRY_URL}/sdp/{product_name}:{product_version}-{arch}",
+                            product_name,
+                            f"{product_version}-{arch}",
+                        )
+            else:
+                for product_name, versions in product_versions.items():
+                    if product_name in excluded_products:
+                        continue
+                    for version in versions:
+                        product_version = f"{version}-stackable{release}"
+                        scan_image(
+                            secobserve_api_token,
+                            f"{REGISTRY_URL}/sdp/{product_name}:{product_version}-{arch}",
+                            product_name,
+                            f"{product_version}-{arch}",
+                        )
 
-                # Check if conf.py exists (old format) or use boil (new format)
-                conf_py_path = "docker-images/conf.py"
-                if os.path.exists(conf_py_path):
-                    # Use old conf.py based approach
-                    print("Using conf.py based configuration")
-                    from image_tools.args import load_configuration
-                    sys.path.append("docker-images")
-                    product_versions_config = load_configuration(conf_py_path)
+        # Scan additional infrastructure/third-party images using Harbor API tag discovery.
+        # This runs once (not per-arch) because tags from Harbor include the arch suffix
+        # already or are arch-agnostic manifests.
+        scan_additional_images(secobserve_api_token)
 
-                    for product in product_versions_config.products:
-                        product_name: str = product["name"]
-                        if product_name in excluded_products:
-                            continue
-                        for version_dict in product.get("versions", []):
-                            version: str = version_dict["product"]
-                            product_version = f"{version}-stackable{release}"
-                            scan_image(
-                                secobserve_api_token,
-                                f"{REGISTRY_URL}/sdp/{product_name}:{product_version}-{arch}",
-                                product_name,
-                                f"{product_version}-{arch}",
-                            )
-                else:
-                    # Use new boil based approach
-                    print("Using boil based configuration")
-                    result = subprocess.run(
-                        ["cargo", "boil", "show", "images"],
-                        cwd="docker-images",
-                        capture_output=True,
-                        text=True,
-                    )
-                    if result.returncode != 0:
-                        print("Failed to get product versions:", result.stderr)
-                        sys.exit(1)
-                    product_versions = json.loads(result.stdout)
-
-                    for product_name, versions in product_versions.items():
-                        if product_name in excluded_products:
-                            continue
-                        for version in versions:
-                            product_version = f"{version}-stackable{release}"
-                            scan_image(
-                                secobserve_api_token,
-                                f"{REGISTRY_URL}/sdp/{product_name}:{product_version}-{arch}",
-                                product_name,
-                                f"{product_version}-{arch}",
-                            )
-
-            # Scan additional infrastructure/third-party images using Harbor API tag discovery.
-            # This runs once (not per-arch) because tags from Harbor include the arch suffix
-            # already or are arch-agnostic manifests.
-            scan_additional_images(secobserve_api_token)
-
-            # Scan the latest stackablectl binary from GitHub releases.
-            scan_stackablectl(secobserve_api_token)
+        # Scan the latest stackablectl binary from GitHub releases.
+        scan_stackablectl(secobserve_api_token)
 
 
 def scan_image(
@@ -415,60 +407,20 @@ def scan_image(
         print("No SBOM found, falling back to image mode")
         mode = "image"  # fallback to image mode if no SBOM is available
 
-    # Run Trivy
-    env = {}
-    env["TARGET"] = image if mode == "image" else "/tmp/bom.json"
-    env["SO_UPLOAD"] = "true"
-    env["SO_PRODUCT_NAME"] = product_name
-    env["SO_API_BASE_URL"] = "https://secobserve-backend.stackable.tech"
-    env["SO_API_TOKEN"] = secobserve_api_token
-    env["SO_BRANCH_NAME"] = branch_name
-    env["TMPDIR"] = "/tmp/trivy_tmp"
-    env["TRIVY_CACHE_DIR"] = "/tmp/trivy_cache"
-    env["REPORT_NAME"] = "trivy.json"
+    trivy_env = _build_base_env(secobserve_api_token, product_name, branch_name)
+    trivy_env["TARGET"] = image if mode == "image" else "/tmp/bom.json"
 
-    cmd = [
-        "docker",
-        "run",
-        "--entrypoint",
-        "/entrypoints/entrypoint_trivy_" + mode + ".sh",
-        "-v",
-        "/tmp/stackable:/tmp",
-        "-v",
-        "/var/run/docker.sock:/var/run/docker.sock",
-    ]
-
-    for key, value in env.items():
-        cmd.append("-e")
-        cmd.append(f"{key}={value}")
-
-    cmd.append("ghcr.io/secobserve/secobserve-scanners:2026_02")
-
+    cmd = _build_scanner_cmd(f"/entrypoints/entrypoint_trivy_{mode}.sh", trivy_env)
     print(" ".join(cmd))
     subprocess.run(cmd)
 
-    # Run Grype
-    env["FURTHER_PARAMETERS"] = "--by-cve"
-    env["GRYPE_DB_CACHE_DIR"] = "/tmp/grype_db_cache"
-    env["REPORT_NAME"] = "grype.json"
-
-    cmd = [
-        "docker",
-        "run",
-        "--entrypoint",
-        "/entrypoints/entrypoint_grype_" + mode + ".sh",
-        "-v",
-        "/tmp/stackable:/tmp",
-        "-v",
-        "/var/run/docker.sock:/var/run/docker.sock",
-    ]
-
-    for key, value in env.items():
-        cmd.append("-e")
-        cmd.append(f"{key}={value}")
-
-    cmd.append("ghcr.io/secobserve/secobserve-scanners:2026_02")
-
+    grype_env = {
+        **trivy_env,
+        "FURTHER_PARAMETERS": "--by-cve",
+        "GRYPE_DB_CACHE_DIR": "/tmp/grype_db_cache",
+        "REPORT_NAME": "grype.json",
+    }
+    cmd = _build_scanner_cmd(f"/entrypoints/entrypoint_grype_{mode}.sh", grype_env)
     subprocess.run(cmd)
 
 
