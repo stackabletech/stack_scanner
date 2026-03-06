@@ -26,7 +26,7 @@ REGISTRY_URL = "oci.stackable.tech"
 HARBOR_API_BASE = f"https://{REGISTRY_URL}/api/v2.0"
 MAX_AGE_DAYS = 180
 SECOBSERVE_API_BASE_URL = "https://secobserve-backend.stackable.tech"
-SECOBSERVE_SCANNER_IMAGE = "ghcr.io/secobserve/secobserve-scanners:2026_02"
+SECOBSERVE_SCANNER_IMAGE = "oci.stackable.tech/sandbox/secobserve-scanners:latest"
 
 # Additional images to scan that are not part of the regular versioned release.
 # These are third-party or infrastructure images referenced by the Stackable platform.
