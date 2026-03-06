@@ -1,9 +1,13 @@
+import datetime
 import tempfile
 import os
 import subprocess
 import sys
 import json
 import base64
+import urllib.error
+import urllib.parse
+import urllib.request
 
 excluded_products = [
     "hello-world",
@@ -19,6 +23,122 @@ excluded_products = [
 ]
 
 REGISTRY_URL = "oci.stackable.tech"
+HARBOR_API_BASE = f"https://{REGISTRY_URL}/api/v2.0"
+MAX_AGE_DAYS = 180
+
+# Additional images to scan that are not part of the regular versioned release.
+# These are third-party or infrastructure images referenced by the Stackable platform.
+ADDITIONAL_IMAGES = [
+    {"project": "sdp", "repository": "csi-node-driver-registrar", "product_name": "csi-node-driver-registrar"},
+    {"project": "sdp", "repository": "csi-provisioner", "product_name": "csi-provisioner"},
+    {"project": "sdp", "repository": "git-sync/git-sync", "product_name": "git-sync"},
+    {"project": "sdp", "repository": "stackable-ui", "product_name": "stackable-ui"},
+    {"project": "sdp", "repository": "spark-connect-client", "product_name": "spark-connect-client"},
+]
+
+
+def harbor_api_request(path: str, params: dict | None = None) -> list | dict | None:
+    """Make a request to the Harbor API and return parsed JSON, or None on failure."""
+    url = f"{HARBOR_API_BASE}{path}"
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+
+    request = urllib.request.Request(url)
+
+    username = os.environ.get("HARBOR_USERNAME")
+    password = os.environ.get("HARBOR_PASSWORD")
+    if username and password:
+        credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
+        request.add_header("Authorization", f"Basic {credentials}")
+
+    try:
+        with urllib.request.urlopen(request) as response:
+            return json.loads(response.read().decode())
+    except (urllib.error.URLError, json.JSONDecodeError) as error:
+        print(f"Harbor API request failed for {path}: {error}")
+        return None
+
+
+def get_harbor_recent_tags(project: str, repository: str) -> list[str] | None:
+    """Return tags pushed within the last MAX_AGE_DAYS days for a Harbor repository.
+
+    Tags belonging to artifacts that have no push_time metadata are included
+    conservatively (i.e. treated as recent). Returns None when the Harbor API
+    is unreachable so the caller can decide how to handle the failure.
+    """
+    encoded_repo = urllib.parse.quote(repository, safe="")
+    path = f"/projects/{project}/repositories/{encoded_repo}/artifacts"
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=MAX_AGE_DAYS)
+
+    tags: list[str] = []
+    page = 1
+    page_size = 100
+
+    while True:
+        artifacts = harbor_api_request(path, {"page": page, "page_size": page_size, "with_tag": "true"})
+        if artifacts is None:
+            return None
+
+        if not artifacts:
+            break
+
+        for artifact in artifacts:
+            artifact_tags = [tag["name"] for tag in (artifact.get("tags") or [])]
+            if not artifact_tags:
+                continue
+
+            push_time_str = artifact.get("push_time")
+            if not push_time_str:
+                # No push_time available, include conservatively.
+                tags.extend(artifact_tags)
+                continue
+
+            try:
+                push_time = datetime.datetime.fromisoformat(push_time_str.replace("Z", "+00:00"))
+                if push_time >= cutoff:
+                    tags.extend(artifact_tags)
+            except ValueError:
+                # Unparseable timestamp, include conservatively.
+                tags.extend(artifact_tags)
+
+        if len(artifacts) < page_size:
+            break
+        page += 1
+
+    return tags
+
+
+def scan_additional_images(secobserve_api_token: str) -> None:
+    """Scan additional images that are not part of the regular versioned Stackable release.
+
+    For each image the Harbor API is queried for tags pushed within the last
+    MAX_AGE_DAYS days.  If the API is unreachable the image is skipped with a
+    warning; if individual artifacts lack push_time metadata their tags are
+    included conservatively.
+    """
+    for image_config in ADDITIONAL_IMAGES:
+        project = image_config["project"]
+        repository = image_config["repository"]
+        product_name = image_config["product_name"]
+
+        print(f"Querying Harbor API for recent tags of {project}/{repository}...")
+        tags = get_harbor_recent_tags(project, repository)
+
+        if tags is None:
+            print(
+                f"WARNING: Harbor API unavailable for {project}/{repository}. "
+                "Skipping – re-run once the registry is reachable."
+            )
+            continue
+
+        if not tags:
+            print(f"No tags pushed within the last {MAX_AGE_DAYS} days for {project}/{repository}, skipping.")
+            continue
+
+        print(f"Found {len(tags)} recent tag(s) for {project}/{repository}: {tags}")
+        for tag in tags:
+            image = f"{REGISTRY_URL}/{project}/{repository}:{tag}"
+            scan_image(secobserve_api_token, image, product_name, tag)
 
 
 def main():
@@ -64,7 +184,6 @@ def main():
                 "druid",
                 "hbase",
                 "hdfs",
-                "hello-world",
                 "hive",
                 "kafka",
                 "listener",
@@ -135,6 +254,11 @@ def main():
                                 product_name,
                                 f"{product_version}-{arch}",
                             )
+
+            # Scan additional infrastructure/third-party images using Harbor API tag discovery.
+            # This runs once (not per-arch) because tags from Harbor include the arch suffix
+            # already or are arch-agnostic manifests.
+            scan_additional_images(secobserve_api_token)
 
 
 def scan_image(
