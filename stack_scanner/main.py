@@ -108,6 +108,118 @@ def get_harbor_recent_tags(project: str, repository: str) -> list[str] | None:
     return tags
 
 
+def get_latest_github_release(owner: str, repo: str) -> str | None:
+    """Fetch the tag name of the latest GitHub release for a repository."""
+    url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+    request = urllib.request.Request(url)
+    request.add_header("Accept", "application/vnd.github+json")
+    request.add_header("User-Agent", "stack-scanner")
+
+    try:
+        with urllib.request.urlopen(request) as response:
+            data = json.loads(response.read().decode())
+            return data["tag_name"]
+    except (urllib.error.URLError, json.JSONDecodeError, KeyError) as error:
+        print(f"Failed to fetch latest {owner}/{repo} release: {error}")
+        return None
+
+
+def scan_stackablectl(secobserve_api_token: str) -> None:
+    """Download and scan the latest stackablectl binary from GitHub releases.
+
+    Uses rootfs mode for both Trivy and Grype, which supports scanning standalone
+    binaries for embedded dependency information. Once the project publishes a
+    CycloneDX SBOM, this should be replaced with SBOM-based scanning.
+    """
+    version = get_latest_github_release("stackabletech", "stackable-cockpit")
+    if version is None:
+        print("WARNING: Could not determine latest stackablectl version, skipping.")
+        return
+
+    print(f"Scanning stackablectl {version}")
+    binary_name = "stackablectl-x86_64-unknown-linux-gnu"
+    download_url = (
+        f"https://github.com/stackabletech/stackable-cockpit/releases/download"
+        f"/{version}/{binary_name}"
+    )
+    binary_path = f"/tmp/stackable/{binary_name}"
+
+    request = urllib.request.Request(download_url)
+    request.add_header("User-Agent", "stack-scanner")
+    try:
+        with urllib.request.urlopen(request) as response:
+            with open(binary_path, "wb") as f:
+                f.write(response.read())
+        print(f"Downloaded stackablectl binary to {binary_path}")
+    except urllib.error.URLError as error:
+        print(f"Failed to download stackablectl binary: {error}")
+        return
+
+    scan_binary(secobserve_api_token, binary_name, "stackablectl", version)
+
+
+def scan_binary(
+    secobserve_api_token: str,
+    file_name: str,
+    product_name: str,
+    branch_name: str,
+) -> None:
+    """Scan a local binary file using Trivy and Grype in rootfs mode.
+
+    The file must reside under /tmp/stackable/ so it is accessible inside the
+    scanner container (which mounts that directory to /tmp).
+    """
+    # Run Trivy
+    env = {}
+    env["TARGET"] = f"/tmp/{file_name}"
+    env["SO_UPLOAD"] = "true"
+    env["SO_PRODUCT_NAME"] = product_name
+    env["SO_API_BASE_URL"] = "https://secobserve-backend.stackable.tech"
+    env["SO_API_TOKEN"] = secobserve_api_token
+    env["SO_BRANCH_NAME"] = branch_name
+    env["TMPDIR"] = "/tmp/trivy_tmp"
+    env["TRIVY_CACHE_DIR"] = "/tmp/trivy_cache"
+    env["REPORT_NAME"] = "trivy.json"
+
+    cmd = [
+        "docker",
+        "run",
+        "--entrypoint",
+        "/entrypoints/entrypoint_trivy_rootfs.sh",
+        "-v",
+        "/tmp/stackable:/tmp",
+        "-v",
+        "/var/run/docker.sock:/var/run/docker.sock",
+    ]
+    for key, value in env.items():
+        cmd.extend(["-e", f"{key}={value}"])
+    cmd.append("oci.stackable.tech/sandbox/secobserve-scanners:latest")
+
+    print(" ".join(cmd))
+    subprocess.run(cmd)
+
+    # Run Grype
+    env["FURTHER_PARAMETERS"] = "--by-cve"
+    env["GRYPE_DB_CACHE_DIR"] = "/tmp/grype_db_cache"
+    env["REPORT_NAME"] = "grype.json"
+
+    cmd = [
+        "docker",
+        "run",
+        "--entrypoint",
+        "/entrypoints/entrypoint_grype_rootfs.sh",
+        "-v",
+        "/tmp/stackable:/tmp",
+        "-v",
+        "/var/run/docker.sock:/var/run/docker.sock",
+    ]
+    for key, value in env.items():
+        cmd.extend(["-e", f"{key}={value}"])
+    cmd.append("oci.stackable.tech/sandbox/secobserve-scanners:latest")
+
+    subprocess.run(cmd)
+
+
 def scan_additional_images(secobserve_api_token: str) -> None:
     """Scan additional images that are not part of the regular versioned Stackable release.
 
@@ -259,6 +371,9 @@ def main():
             # This runs once (not per-arch) because tags from Harbor include the arch suffix
             # already or are arch-agnostic manifests.
             scan_additional_images(secobserve_api_token)
+
+            # Scan the latest stackablectl binary from GitHub releases.
+            scan_stackablectl(secobserve_api_token)
 
 
 def scan_image(
