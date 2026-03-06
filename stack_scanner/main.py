@@ -193,7 +193,7 @@ def scan_binary(
     ]
     for key, value in env.items():
         cmd.extend(["-e", f"{key}={value}"])
-    cmd.append("oci.stackable.tech/sandbox/secobserve-scanners:latest")
+    cmd.append("ghcr.io/secobserve/secobserve-scanners:2026_02")
 
     print(" ".join(cmd))
     subprocess.run(cmd)
@@ -215,7 +215,7 @@ def scan_binary(
     ]
     for key, value in env.items():
         cmd.extend(["-e", f"{key}={value}"])
-    cmd.append("oci.stackable.tech/sandbox/secobserve-scanners:latest")
+    cmd.append("ghcr.io/secobserve/secobserve-scanners:2026_02")
 
     subprocess.run(cmd)
 
@@ -442,7 +442,7 @@ def scan_image(
         cmd.append("-e")
         cmd.append(f"{key}={value}")
 
-    cmd.append("oci.stackable.tech/sandbox/secobserve-scanners:latest")
+    cmd.append("ghcr.io/secobserve/secobserve-scanners:2026_02")
 
     print(" ".join(cmd))
     subprocess.run(cmd)
@@ -467,7 +467,7 @@ def scan_image(
         cmd.append("-e")
         cmd.append(f"{key}={value}")
 
-    cmd.append("oci.stackable.tech/sandbox/secobserve-scanners:latest")
+    cmd.append("ghcr.io/secobserve/secobserve-scanners:2026_02")
 
     subprocess.run(cmd)
 
