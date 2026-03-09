@@ -28,6 +28,9 @@ HARBOR_API_BASE = f"https://{REGISTRY_URL}/api/v2.0"
 MAX_AGE_DAYS = 180
 SECOBSERVE_API_BASE_URL = "https://secobserve-backend.stackable.tech"
 SECOBSERVE_SCANNER_IMAGE = "oci.stackable.tech/sandbox/secobserve-scanners:latest"
+DEV_RELEASE = "0.0.0-dev"
+
+_PR_TAG_RE = re.compile(r"-pr\d+")
 
 # Additional images to scan that are not part of the regular versioned release.
 # These are third-party or infrastructure images referenced by the Stackable platform.
@@ -62,18 +65,19 @@ def harbor_api_request(path: str, params: dict | None = None) -> list | dict | N
         return None
 
 
-def get_harbor_recent_tags(project: str, repository: str) -> list[str] | None:
-    """Return tags pushed within the last MAX_AGE_DAYS days for a Harbor repository.
+def _iter_harbor_tagged_artifacts(
+    project: str, repository: str
+) -> list[tuple[datetime.datetime | None, list[str]]] | None:
+    """Paginate all tagged artifacts for a Harbor repository.
 
-    Tags belonging to artifacts that have no push_time metadata are included
-    conservatively (i.e. treated as recent). Returns None when the Harbor API
-    is unreachable so the caller can decide how to handle the failure.
+    Returns a list of (push_time, tag_names) pairs, where push_time is None when
+    the timestamp is missing or unparseable. PR-tagged artifacts are excluded.
+    Returns None when the Harbor API is unreachable.
     """
     encoded_repo = urllib.parse.quote(repository, safe="")
     path = f"/projects/{project}/repositories/{encoded_repo}/artifacts"
-    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=MAX_AGE_DAYS)
 
-    tags: list[str] = []
+    result: list[tuple[datetime.datetime | None, list[str]]] = []
     page = 1
     page_size = 100
 
@@ -89,30 +93,55 @@ def get_harbor_recent_tags(project: str, repository: str) -> list[str] | None:
             artifact_tags = [
                 tag["name"]
                 for tag in (artifact.get("tags") or [])
-                if not re.search(r"-pr\d+", tag["name"])
+                if not _PR_TAG_RE.search(tag["name"])
             ]
             if not artifact_tags:
                 continue
 
+            push_time: datetime.datetime | None = None
             push_time_str = artifact.get("push_time")
-            if not push_time_str:
-                # No push_time available, include conservatively.
-                tags.extend(artifact_tags)
-                continue
+            if push_time_str:
+                try:
+                    push_time = datetime.datetime.fromisoformat(push_time_str.replace("Z", "+00:00"))
+                except ValueError:
+                    pass
 
-            try:
-                push_time = datetime.datetime.fromisoformat(push_time_str.replace("Z", "+00:00"))
-                if push_time >= cutoff:
-                    tags.extend(artifact_tags)
-            except ValueError:
-                # Unparseable timestamp, include conservatively.
-                tags.extend(artifact_tags)
+            result.append((push_time, artifact_tags))
 
         if len(artifacts) < page_size:
             break
         page += 1
 
-    return tags
+    return result
+
+
+def get_harbor_tags(
+    project: str, repository: str
+) -> tuple[list[str], str | None] | None:
+    """Return (recent_tags, latest_tag) for a Harbor repository in a single API pass.
+
+    recent_tags contains tags pushed within the last MAX_AGE_DAYS days; artifacts
+    without a parseable push_time are included conservatively. latest_tag is the
+    tag from the most recently pushed artifact with a parseable timestamp, or None.
+    Returns None when the Harbor API is unreachable.
+    """
+    artifact_data = _iter_harbor_tagged_artifacts(project, repository)
+    if artifact_data is None:
+        return None
+
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=MAX_AGE_DAYS)
+    recent_tags: list[str] = []
+    latest_tag: str | None = None
+    latest_time: datetime.datetime | None = None
+
+    for push_time, artifact_tags in artifact_data:
+        if push_time is None or push_time >= cutoff:
+            recent_tags.extend(artifact_tags)
+        if push_time is not None and (latest_time is None or push_time > latest_time):
+            latest_time = push_time
+            latest_tag = artifact_tags[0]
+
+    return recent_tags, latest_tag
 
 
 def get_latest_github_release(owner: str, repo: str) -> str | None:
@@ -245,20 +274,29 @@ def scan_additional_images(secobserve_api_token: str) -> None:
         product_name = image_config["product_name"]
 
         print(f"Querying Harbor API for recent tags of {project}/{repository}...")
-        tags = get_harbor_recent_tags(project, repository)
+        result = get_harbor_tags(project, repository)
 
-        if tags is None:
+        if result is None:
             print(
                 f"WARNING: Harbor API unavailable for {project}/{repository}. "
                 "Skipping – re-run once the registry is reachable."
             )
             continue
 
-        if not tags:
-            print(f"No tags pushed within the last {MAX_AGE_DAYS} days for {project}/{repository}, skipping.")
+        recent_tags, latest_tag = result
+        if recent_tags:
+            tags = recent_tags
+            print(f"Found {len(tags)} recent tag(s) for {project}/{repository}: {tags}")
+        elif latest_tag is not None:
+            print(
+                f"No tags pushed within the last {MAX_AGE_DAYS} days for {project}/{repository}, "
+                "falling back to most recently pushed tag."
+            )
+            tags = [latest_tag]
+        else:
+            print(f"WARNING: No tagged artifacts found for {project}/{repository}, skipping.")
             continue
 
-        print(f"Found {len(tags)} recent tag(s) for {project}/{repository}: {tags}")
         for tag in tags:
             image = f"{REGISTRY_URL}/{project}/{repository}:{tag}"
             scan_image(secobserve_api_token, image, product_name, tag)
@@ -290,9 +328,7 @@ def main():
     else:
         secobserve_api_token = sys.argv[2]
         release = sys.argv[3]
-        checkout = "tags/" + release
-        if release == "0.0.0-dev":
-            checkout = "main"
+        checkout = "main" if release == DEV_RELEASE else "tags/" + release
 
         subprocess.run(["git", "fetch", "--all"], cwd="docker-images")
         subprocess.run(["git", "checkout", checkout], cwd="docker-images")
@@ -382,7 +418,10 @@ def main():
         scan_additional_images(secobserve_api_token)
 
         # Scan the latest stackablectl binary from GitHub releases.
-        scan_stackablectl(secobserve_api_token)
+        # Only run for the dev release to avoid redundant scans when multiple releases
+        # are processed in the same workflow run (stackablectl is release-independent).
+        if release == DEV_RELEASE:
+            scan_stackablectl(secobserve_api_token)
 
 
 def scan_image(
