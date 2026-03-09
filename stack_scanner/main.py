@@ -1,5 +1,6 @@
 import datetime
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -85,7 +86,11 @@ def get_harbor_recent_tags(project: str, repository: str) -> list[str] | None:
             break
 
         for artifact in artifacts:
-            artifact_tags = [tag["name"] for tag in (artifact.get("tags") or [])]
+            artifact_tags = [
+                tag["name"]
+                for tag in (artifact.get("tags") or [])
+                if not re.search(r"-pr\d+", tag["name"])
+            ]
             if not artifact_tags:
                 continue
 
