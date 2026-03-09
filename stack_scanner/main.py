@@ -192,25 +192,37 @@ def scan_binary(
     product_name: str,
     branch_name: str,
 ) -> None:
-    """Scan a local binary file using Trivy and Grype in rootfs mode.
+    """Scan a local binary file using Trivy (filesystem) and Grype (sbom).
 
     The file must reside under /tmp/stackable/ so it is accessible inside the
     scanner container (which mounts that directory to /tmp).
+
+    Trivy runs in filesystem mode against the binary and writes a CycloneDX
+    report to /tmp/trivy.json.  Grype then uses that report as SBOM input,
+    since there is no Grype filesystem entrypoint.
     """
+    # Run Trivy in filesystem mode. RUN_DIRECTORY is required by the entrypoint
+    # (it cd's there before running trivy) and also becomes the implicit WORKSPACE
+    # when neither GITHUB_WORKSPACE nor CI_PROJECT_DIR is set, so the report ends
+    # up at /tmp/trivy.json inside the container (= /tmp/stackable/trivy.json on host).
     trivy_env = _build_base_env(secobserve_api_token, product_name, branch_name)
     trivy_env["TARGET"] = f"/tmp/{file_name}"
+    trivy_env["RUN_DIRECTORY"] = "/tmp"
 
-    cmd = _build_scanner_cmd("/entrypoints/entrypoint_trivy_rootfs.sh", trivy_env)
+    cmd = _build_scanner_cmd("/entrypoints/entrypoint_trivy_filesystem.sh", trivy_env)
     print(" ".join(cmd))
     subprocess.run(cmd)
 
+    # Run Grype in sbom mode, using Trivy's CycloneDX output as input.
     grype_env = {
         **trivy_env,
+        "TARGET": "/tmp/trivy.json",
         "FURTHER_PARAMETERS": "--by-cve",
         "GRYPE_DB_CACHE_DIR": "/tmp/grype_db_cache",
         "REPORT_NAME": "grype.json",
     }
-    cmd = _build_scanner_cmd("/entrypoints/entrypoint_grype_rootfs.sh", grype_env)
+    del grype_env["RUN_DIRECTORY"]
+    cmd = _build_scanner_cmd("/entrypoints/entrypoint_grype_sbom.sh", grype_env)
     subprocess.run(cmd)
 
 
