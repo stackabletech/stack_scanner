@@ -260,6 +260,24 @@ def scan_binary(
     subprocess.run(cmd)
 
 
+_ARCH_SUFFIXES = ("-amd64", "-arm64")
+
+
+def _filter_redundant_manifest_tags(tags: list[str]) -> list[str]:
+    """Remove non-arch-specific tags when arch-specific variants exist.
+
+    For example, if both "v4.5.1" and "v4.5.1-amd64" are present, the plain
+    "v4.5.1" tag is dropped because the arch-specific tags already cover it.
+    """
+    arch_bases = {
+        tag.removesuffix(suffix)
+        for tag in tags
+        for suffix in _ARCH_SUFFIXES
+        if tag.endswith(suffix)
+    }
+    return [tag for tag in tags if tag not in arch_bases or tag.endswith(_ARCH_SUFFIXES)]
+
+
 def scan_additional_images(secobserve_api_token: str) -> None:
     """Scan additional images that are not part of the regular versioned Stackable release.
 
@@ -285,7 +303,7 @@ def scan_additional_images(secobserve_api_token: str) -> None:
 
         recent_tags, latest_tag = result
         if recent_tags:
-            tags = recent_tags
+            tags = _filter_redundant_manifest_tags(recent_tags)
             print(f"Found {len(tags)} recent tag(s) for {project}/{repository}: {tags}")
         elif latest_tag is not None:
             print(
