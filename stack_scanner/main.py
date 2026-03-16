@@ -160,12 +160,18 @@ def get_latest_github_release(owner: str, repo: str) -> str | None:
         return None
 
 
-def scan_stackablectl(secobserve_api_token: str) -> None:
-    """Download and scan the latest stackablectl binary from GitHub releases.
+_STACKABLECTL_SBOMS = [
+    "stackablectl-x86_64-unknown-linux-gnu.cdx.xml",
+    "stackablectl-aarch64-unknown-linux-gnu.cdx.xml",
+]
 
-    Uses rootfs mode for both Trivy and Grype, which supports scanning standalone
-    binaries for embedded dependency information. Once the project publishes a
-    CycloneDX SBOM, this should be replaced with SBOM-based scanning.
+
+def scan_stackablectl(secobserve_api_token: str) -> None:
+    """Download and scan the latest stackablectl SBOMs from GitHub releases.
+
+    The stackable-cockpit project publishes CycloneDX SBOMs alongside each
+    binary.  We download the SBOM files and scan them with Trivy and Grype in
+    SBOM mode.
     """
     version = get_latest_github_release("stackabletech", "stackable-cockpit")
     if version is None:
@@ -173,25 +179,26 @@ def scan_stackablectl(secobserve_api_token: str) -> None:
         return
 
     print(f"Scanning stackablectl {version}")
-    binary_name = "stackablectl-x86_64-unknown-linux-gnu"
-    download_url = (
-        f"https://github.com/stackabletech/stackable-cockpit/releases/download"
-        f"/{version}/{binary_name}"
-    )
-    binary_path = f"/tmp/stackable/{binary_name}"
 
-    request = urllib.request.Request(download_url)
-    request.add_header("User-Agent", "stack-scanner")
-    try:
-        with urllib.request.urlopen(request) as response:
-            with open(binary_path, "wb") as f:
-                f.write(response.read())
-        print(f"Downloaded stackablectl binary to {binary_path}")
-    except urllib.error.URLError as error:
-        print(f"Failed to download stackablectl binary: {error}")
-        return
+    for sbom_name in _STACKABLECTL_SBOMS:
+        download_url = (
+            f"https://github.com/stackabletech/stackable-cockpit/releases/download"
+            f"/{version}/{sbom_name}"
+        )
+        sbom_path = f"/tmp/stackable/{sbom_name}"
 
-    scan_binary(secobserve_api_token, binary_name, "stackablectl", version)
+        request = urllib.request.Request(download_url)
+        request.add_header("User-Agent", "stack-scanner")
+        try:
+            with urllib.request.urlopen(request) as response:
+                with open(sbom_path, "wb") as f:
+                    f.write(response.read())
+            print(f"Downloaded SBOM to {sbom_path}")
+        except urllib.error.URLError as error:
+            print(f"Failed to download SBOM {sbom_name}: {error}")
+            continue
+
+        scan_sbom(secobserve_api_token, sbom_name, "stackablectl", version)
 
 
 def _build_base_env(secobserve_api_token: str, product_name: str, branch_name: str) -> dict:
@@ -220,42 +227,30 @@ def _build_scanner_cmd(entrypoint: str, env: dict) -> list[str]:
     return cmd
 
 
-def scan_binary(
+def scan_sbom(
     secobserve_api_token: str,
     file_name: str,
     product_name: str,
     branch_name: str,
 ) -> None:
-    """Scan a local binary file using Trivy (filesystem) and Grype (sbom).
+    """Scan a local SBOM file using Trivy and Grype in SBOM mode.
 
     The file must reside under /tmp/stackable/ so it is accessible inside the
     scanner container (which mounts that directory to /tmp).
-
-    Trivy runs in filesystem mode against the binary and writes a CycloneDX
-    report to /tmp/trivy.json.  Grype then uses that report as SBOM input,
-    since there is no Grype filesystem entrypoint.
     """
-    # Run Trivy in filesystem mode. RUN_DIRECTORY is required by the entrypoint
-    # (it cd's there before running trivy) and also becomes the implicit WORKSPACE
-    # when neither GITHUB_WORKSPACE nor CI_PROJECT_DIR is set, so the report ends
-    # up at /tmp/trivy.json inside the container (= /tmp/stackable/trivy.json on host).
     trivy_env = _build_base_env(secobserve_api_token, product_name, branch_name)
     trivy_env["TARGET"] = f"/tmp/{file_name}"
-    trivy_env["RUN_DIRECTORY"] = "/tmp"
 
-    cmd = _build_scanner_cmd("/entrypoints/entrypoint_trivy_filesystem.sh", trivy_env)
+    cmd = _build_scanner_cmd("/entrypoints/entrypoint_trivy_sbom.sh", trivy_env)
     print(" ".join(cmd))
     subprocess.run(cmd)
 
-    # Run Grype in sbom mode, using Trivy's CycloneDX output as input.
     grype_env = {
         **trivy_env,
-        "TARGET": "/tmp/trivy.json",
         "FURTHER_PARAMETERS": "--by-cve",
         "GRYPE_DB_CACHE_DIR": "/tmp/grype_db_cache",
         "REPORT_NAME": "grype.json",
     }
-    del grype_env["RUN_DIRECTORY"]
     cmd = _build_scanner_cmd("/entrypoints/entrypoint_grype_sbom.sh", grype_env)
     subprocess.run(cmd)
 
