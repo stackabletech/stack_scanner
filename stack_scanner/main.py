@@ -185,20 +185,38 @@ def scan_stackablectl(secobserve_api_token: str) -> None:
             f"https://github.com/stackabletech/stackable-cockpit/releases/download"
             f"/{version}/{sbom_name}"
         )
-        sbom_path = f"/tmp/stackable/{sbom_name}"
+        xml_path = f"/tmp/stackable/{sbom_name}"
 
         request = urllib.request.Request(download_url)
         request.add_header("User-Agent", "stack-scanner")
         try:
             with urllib.request.urlopen(request) as response:
-                with open(sbom_path, "wb") as f:
+                with open(xml_path, "wb") as f:
                     f.write(response.read())
-            print(f"Downloaded SBOM to {sbom_path}")
+            print(f"Downloaded SBOM to {xml_path}")
         except urllib.error.URLError as error:
             print(f"Failed to download SBOM {sbom_name}: {error}")
             continue
 
-        scan_sbom(secobserve_api_token, sbom_name, "stackablectl", version)
+        # Trivy does not support CycloneDX XML, so convert to JSON first.
+        json_name = sbom_name.replace(".cdx.xml", ".cdx.json")
+        json_path = f"/tmp/stackable/{json_name}"
+        result = subprocess.run(
+            [
+                "cyclonedx", "convert",
+                "--input-file", xml_path,
+                "--input-format", "xml",
+                "--output-file", json_path,
+                "--output-format", "json",
+                "--output-version", "v1_5",
+            ],
+        )
+        if result.returncode != 0:
+            print(f"Failed to convert {sbom_name} from XML to JSON")
+            continue
+        print(f"Converted {xml_path} to {json_path}")
+
+        scan_sbom(secobserve_api_token, json_name, "stackablectl", version)
 
 
 def _build_base_env(secobserve_api_token: str, product_name: str, branch_name: str) -> dict:
