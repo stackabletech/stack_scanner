@@ -32,5 +32,5 @@ jobs:
         run: poetry install
       - name: Scan dev images
         run: poetry run python stack_scanner/main.py scan-release ${{ secrets.SECOBSERVE_API_TOKEN }} 0.0.0-dev
-      - name: Scan 25.11.0
-        run: poetry run python stack_scanner/main.py scan-release ${{ secrets.SECOBSERVE_API_TOKEN }} 25.11.0
+      - name: Scan 26.3.0
+        run: poetry run python stack_scanner/main.py scan-release ${{ secrets.SECOBSERVE_API_TOKEN }} 26.3.0
