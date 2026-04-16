@@ -394,12 +394,20 @@ def main():
             use_conf_py = True
         else:
             print("Using boil based configuration")
+            # boil >= 0.2.0 uses "image list", older versions use "show images"
             result = subprocess.run(
                 ["cargo", "boil", "image", "list"],
                 cwd="docker-images",
                 capture_output=True,
                 text=True,
             )
+            if result.returncode != 0:
+                result = subprocess.run(
+                    ["cargo", "boil", "show", "images"],
+                    cwd="docker-images",
+                    capture_output=True,
+                    text=True,
+                )
             if result.returncode != 0:
                 print("Failed to get product versions:", result.stderr)
                 sys.exit(1)
