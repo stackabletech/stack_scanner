@@ -395,7 +395,7 @@ def main():
         else:
             print("Using boil based configuration")
             result = subprocess.run(
-                ["cargo", "boil", "show", "images"],
+                ["cargo", "boil", "image", "list"],
                 cwd="docker-images",
                 capture_output=True,
                 text=True,
