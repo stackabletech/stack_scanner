@@ -38,7 +38,7 @@ ADDITIONAL_IMAGES = [
     {"project": "sdp", "repository": "csi-node-driver-registrar", "product_name": "csi-node-driver-registrar"},
     {"project": "sdp", "repository": "csi-provisioner", "product_name": "csi-provisioner"},
     {"project": "sdp", "repository": "git-sync/git-sync", "product_name": "git-sync"},
-    {"project": "sdp", "repository": "stackable-ui", "product_name": "stackable-ui"},
+    {"project": "sdp", "repository": "cockpit", "product_name": "cockpit"},
     {"project": "sdp", "repository": "spark-connect-client", "product_name": "spark-connect-client"},
 ]
 
