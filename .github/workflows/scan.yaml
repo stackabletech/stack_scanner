@@ -30,7 +30,5 @@ jobs:
           chmod +x /usr/local/bin/cyclonedx
       - name: Install deps
         run: poetry install
-      - name: Scan dev images
-        run: poetry run python stack_scanner/main.py scan-release ${{ secrets.SECOBSERVE_API_TOKEN }} 0.0.0-dev
-      - name: Scan 26.3.0
-        run: poetry run python stack_scanner/main.py scan-release ${{ secrets.SECOBSERVE_API_TOKEN }} 26.3.0
+      - name: Scan dev plus current and previous release
+        run: poetry run python stack_scanner/main.py scan-latest ${{ secrets.SECOBSERVE_API_TOKEN }}

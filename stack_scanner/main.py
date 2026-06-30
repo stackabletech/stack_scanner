@@ -32,6 +32,10 @@ DEV_RELEASE = "0.0.0-dev"
 
 _PR_TAG_RE = re.compile(r"-pr\d+")
 
+# Stable release tags follow calendar versioning, e.g. "26.3.0". Pre-release tags
+# such as "26.3.0-rc1" or "24.11.0-test1" carry a suffix and are excluded.
+_STABLE_RELEASE_RE = re.compile(r"^\d+\.\d+\.\d+$")
+
 # Additional images to scan that are not part of the regular versioned release.
 # These are third-party or infrastructure images referenced by the Stackable platform.
 ADDITIONAL_IMAGES = [
@@ -142,6 +146,28 @@ def get_harbor_tags(
             latest_tag = artifact_tags[0]
 
     return recent_tags, latest_tag
+
+
+def get_latest_releases(count: int, docker_images_dir: str = "docker-images") -> list[str]:
+    """Return the most recent stable SDP release tags from the docker-images repo.
+
+    Releases are calendar-versioned git tags (e.g. "26.3.0"). Pre-release tags
+    such as "26.3.0-rc1" are ignored. Tags are fetched first so the result is
+    not limited to whatever was already checked out locally.
+    """
+    subprocess.run(["git", "fetch", "--tags", "--force"], cwd=docker_images_dir)
+
+    result = subprocess.run(
+        ["git", "tag"],
+        cwd=docker_images_dir,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    releases = [tag for tag in result.stdout.split() if _STABLE_RELEASE_RE.match(tag)]
+    releases.sort(key=lambda tag: tuple(int(part) for part in tag.split(".")))
+    return releases[-count:]
 
 
 def get_latest_github_release(owner: str, repo: str) -> str | None:
@@ -334,10 +360,12 @@ def scan_additional_images(secobserve_api_token: str) -> None:
 
 
 def main():
-    if len(sys.argv) < 4:
+    if len(sys.argv) < 3:
         print(
             "Usage:\n"
             "python main.py scan-release <secobserve_api_token> <release>\n"
+            "or\n"
+            "python main.py scan-latest <secobserve_api_token>\n"
             "or\n"
             "python main.py scan-image <secobserve_api_token> <image> <product_name> <product_version>"
         )
@@ -356,111 +384,126 @@ def main():
         product_name = sys.argv[4]
         scan_image(secobserve_api_token, image, product_name, sys.argv[5])
         sys.exit(0)
+    elif sys.argv[1] == "scan-latest":
+        # Scan the dev release plus the current and previous stable releases.
+        # The stable releases are discovered dynamically from the docker-images
+        # git tags so the workflow does not need updating on every release.
+        secobserve_api_token = sys.argv[2]
+        releases = [DEV_RELEASE] + get_latest_releases(2)
+        print(f"Scanning releases: {releases}")
+        for release in releases:
+            scan_release(secobserve_api_token, release)
+        sys.exit(0)
     else:
         secobserve_api_token = sys.argv[2]
         release = sys.argv[3]
-        checkout = "main" if release == DEV_RELEASE else "tags/" + release
+        scan_release(secobserve_api_token, release)
 
-        subprocess.run(["git", "fetch", "--all"], cwd="docker-images")
-        subprocess.run(["git", "checkout", checkout], cwd="docker-images")
-        subprocess.run(["git", "pull"], cwd="docker-images")
 
-        operators = [
-            "airflow",
-            "commons",
-            "druid",
-            "hbase",
-            "hdfs",
-            "hive",
-            "kafka",
-            "listener",
-            "nifi",
-            "opa",
-            "opensearch",
-            "secret",
-            "spark-k8s",
-            "superset",
-            "trino",
-            "zookeeper",
-        ]
+def scan_release(secobserve_api_token: str, release: str) -> None:
+    """Scan all operator and product images of a single SDP release."""
+    checkout = "main" if release == DEV_RELEASE else "tags/" + release
 
-        # Load product version configuration once, outside the arch loop.
-        conf_py_path = "docker-images/conf.py"
-        if os.path.exists(conf_py_path):
-            print("Using conf.py based configuration")
-            sys.path.insert(0, os.path.abspath("docker-images"))
-            from image_tools.args import load_configuration
-            product_versions_config = load_configuration(conf_py_path)
-            use_conf_py = True
-        else:
-            print("Using boil based configuration")
-            # boil >= 0.2.0 uses "image list", older versions use "show images"
+    subprocess.run(["git", "fetch", "--all"], cwd="docker-images")
+    subprocess.run(["git", "checkout", checkout], cwd="docker-images")
+    subprocess.run(["git", "pull"], cwd="docker-images")
+
+    operators = [
+        "airflow",
+        "commons",
+        "druid",
+        "hbase",
+        "hdfs",
+        "hive",
+        "kafka",
+        "listener",
+        "nifi",
+        "opa",
+        "opensearch",
+        "secret",
+        "spark-k8s",
+        "superset",
+        "trino",
+        "zookeeper",
+    ]
+
+    # Load product version configuration once, outside the arch loop.
+    conf_py_path = "docker-images/conf.py"
+    if os.path.exists(conf_py_path):
+        print("Using conf.py based configuration")
+        sys.path.insert(0, os.path.abspath("docker-images"))
+        from image_tools.args import load_configuration
+        product_versions_config = load_configuration(conf_py_path)
+        use_conf_py = True
+    else:
+        print("Using boil based configuration")
+        # boil >= 0.2.0 uses "image list", older versions use "show images"
+        result = subprocess.run(
+            ["cargo", "boil", "image", "list"],
+            cwd="docker-images",
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
             result = subprocess.run(
-                ["cargo", "boil", "image", "list"],
+                ["cargo", "boil", "show", "images"],
                 cwd="docker-images",
                 capture_output=True,
                 text=True,
             )
-            if result.returncode != 0:
-                result = subprocess.run(
-                    ["cargo", "boil", "show", "images"],
-                    cwd="docker-images",
-                    capture_output=True,
-                    text=True,
-                )
-            if result.returncode != 0:
-                print("Failed to get product versions:", result.stderr)
-                sys.exit(1)
-            product_versions = json.loads(result.stdout)
-            use_conf_py = False
+        if result.returncode != 0:
+            print("Failed to get product versions:", result.stderr)
+            sys.exit(1)
+        product_versions = json.loads(result.stdout)
+        use_conf_py = False
 
-        for arch in ["amd64", "arm64"]:
-            for operator_name in operators:
-                product_name = f"{operator_name}-operator"
-                scan_image(
-                    secobserve_api_token,
-                    f"{REGISTRY_URL}/sdp/{product_name}:{release}-{arch}",
-                    product_name,
-                    f"{release}-{arch}",
-                )
+    for arch in ["amd64", "arm64"]:
+        for operator_name in operators:
+            product_name = f"{operator_name}-operator"
+            scan_image(
+                secobserve_api_token,
+                f"{REGISTRY_URL}/sdp/{product_name}:{release}-{arch}",
+                product_name,
+                f"{release}-{arch}",
+            )
 
-            if use_conf_py:
-                for product in product_versions_config.products:
-                    product_name: str = product["name"]
-                    if product_name in excluded_products:
-                        continue
-                    for version_dict in product.get("versions", []):
-                        version: str = version_dict["product"]
-                        product_version = f"{version}-stackable{release}"
-                        scan_image(
-                            secobserve_api_token,
-                            f"{REGISTRY_URL}/sdp/{product_name}:{product_version}-{arch}",
-                            product_name,
-                            f"{product_version}-{arch}",
-                        )
-            else:
-                for product_name, versions in product_versions.items():
-                    if product_name in excluded_products:
-                        continue
-                    for version in versions:
-                        product_version = f"{version}-stackable{release}"
-                        scan_image(
-                            secobserve_api_token,
-                            f"{REGISTRY_URL}/sdp/{product_name}:{product_version}-{arch}",
-                            product_name,
-                            f"{product_version}-{arch}",
-                        )
+        if use_conf_py:
+            for product in product_versions_config.products:
+                product_name: str = product["name"]
+                if product_name in excluded_products:
+                    continue
+                for version_dict in product.get("versions", []):
+                    version: str = version_dict["product"]
+                    product_version = f"{version}-stackable{release}"
+                    scan_image(
+                        secobserve_api_token,
+                        f"{REGISTRY_URL}/sdp/{product_name}:{product_version}-{arch}",
+                        product_name,
+                        f"{product_version}-{arch}",
+                    )
+        else:
+            for product_name, versions in product_versions.items():
+                if product_name in excluded_products:
+                    continue
+                for version in versions:
+                    product_version = f"{version}-stackable{release}"
+                    scan_image(
+                        secobserve_api_token,
+                        f"{REGISTRY_URL}/sdp/{product_name}:{product_version}-{arch}",
+                        product_name,
+                        f"{product_version}-{arch}",
+                    )
 
-        # Scan additional infrastructure/third-party images using Harbor API tag discovery.
-        # This runs once (not per-arch) because tags from Harbor include the arch suffix
-        # already or are arch-agnostic manifests.
-        scan_additional_images(secobserve_api_token)
+    # Scan additional infrastructure/third-party images using Harbor API tag discovery.
+    # This runs once (not per-arch) because tags from Harbor include the arch suffix
+    # already or are arch-agnostic manifests.
+    scan_additional_images(secobserve_api_token)
 
-        # Scan the latest stackablectl binary from GitHub releases.
-        # Only run for the dev release to avoid redundant scans when multiple releases
-        # are processed in the same workflow run (stackablectl is release-independent).
-        if release == DEV_RELEASE:
-            scan_stackablectl(secobserve_api_token)
+    # Scan the latest stackablectl binary from GitHub releases.
+    # Only run for the dev release to avoid redundant scans when multiple releases
+    # are processed in the same workflow run (stackablectl is release-independent).
+    if release == DEV_RELEASE:
+        scan_stackablectl(secobserve_api_token)
 
 
 def scan_image(
