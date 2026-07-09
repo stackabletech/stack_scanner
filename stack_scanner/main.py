@@ -247,28 +247,69 @@ def scan_stackablectl(secobserve_api_token: str) -> None:
 
 def _build_base_env(secobserve_api_token: str, product_name: str, branch_name: str) -> dict:
     return {
-        "SO_UPLOAD": "true",
         "SO_PRODUCT_NAME": product_name,
         "SO_API_BASE_URL": SECOBSERVE_API_BASE_URL,
         "SO_API_TOKEN": secobserve_api_token,
         "SO_BRANCH_NAME": branch_name,
+        "SO_SUPPRESS_LICENSES": "true",
         "TMPDIR": "/tmp/trivy_tmp",
         "TRIVY_CACHE_DIR": "/tmp/trivy_cache",
-        "REPORT_NAME": "trivy.json",
+        "GRYPE_DB_CACHE_DIR": "/tmp/grype_db_cache",
     }
 
 
-def _build_scanner_cmd(entrypoint: str, env: dict) -> list[str]:
+# Report file names written inside the scanner container. Trivy and Grype scan
+# the same target independently into separate files, so they never collide.
+_TRIVY_REPORT = "trivy.json"
+_GRYPE_REPORT = "grype.json"
+
+
+def _combined_scan_script(mode: str) -> str:
+    """Return a shell script that scans with Trivy and Grype, then uploads results.
+
+    Trivy and Grype scan the same target independently, so they are launched
+    concurrently to cut wall-clock time. Running both in a single container also
+    halves the number of ``docker run`` startups per image.
+
+    The uploads are kept sequential on purpose. SecObserve creates the branch on
+    first import via ``get_or_create`` and has no request-level transaction, so
+    two concurrent uploads for a not-yet-seen tag could race on branch creation.
+    Scanning dominates the runtime, so serialising the two uploads costs almost
+    nothing.
+
+    The existing per-scanner entrypoints are reused (with ``SO_UPLOAD=false`` so
+    they only scan) to avoid duplicating the scanner invocation flags here.
+    """
+    return (
+        "export TRIVY_NO_PROGRESS=true\n"
+        f"SO_UPLOAD=false REPORT_NAME={_TRIVY_REPORT} /entrypoints/entrypoint_trivy_{mode}.sh &\n"
+        "trivy_pid=$!\n"
+        f"SO_UPLOAD=false REPORT_NAME={_GRYPE_REPORT} /entrypoints/entrypoint_grype_{mode}.sh &\n"
+        "grype_pid=$!\n"
+        'wait "$trivy_pid" || echo "WARNING: Trivy scan failed"\n'
+        'wait "$grype_pid" || echo "WARNING: Grype scan failed"\n'
+        f"if [ -f {_TRIVY_REPORT} ]; then SO_FILE_NAME={_TRIVY_REPORT} SO_PARSER_NAME=CycloneDX "
+        'file_upload_observations.sh; else echo "WARNING: no Trivy report to upload"; fi\n'
+        f"if [ -f {_GRYPE_REPORT} ]; then SO_FILE_NAME={_GRYPE_REPORT} SO_PARSER_NAME=CycloneDX "
+        'file_upload_observations.sh; else echo "WARNING: no Grype report to upload"; fi\n'
+    )
+
+
+def _run_combined_scan(env: dict, mode: str) -> None:
+    """Run Trivy and Grype in a single container for one target, then upload."""
     cmd = [
         "docker", "run",
-        "--entrypoint", entrypoint,
+        "--entrypoint", "/bin/sh",
         "-v", "/tmp/stackable:/tmp",
         "-v", "/var/run/docker.sock:/var/run/docker.sock",
     ]
     for key, value in env.items():
         cmd.extend(["-e", f"{key}={value}"])
     cmd.append(SECOBSERVE_SCANNER_IMAGE)
-    return cmd
+    cmd.extend(["-c", _combined_scan_script(mode)])
+
+    print(f"docker run (combined trivy+grype, {mode} mode) TARGET={env.get('TARGET')}")
+    subprocess.run(cmd)
 
 
 def scan_sbom(
@@ -282,21 +323,9 @@ def scan_sbom(
     The file must reside under /tmp/stackable/ so it is accessible inside the
     scanner container (which mounts that directory to /tmp).
     """
-    trivy_env = _build_base_env(secobserve_api_token, product_name, branch_name)
-    trivy_env["TARGET"] = f"/tmp/{file_name}"
-
-    cmd = _build_scanner_cmd("/entrypoints/entrypoint_trivy_sbom.sh", trivy_env)
-    print(" ".join(cmd))
-    subprocess.run(cmd)
-
-    grype_env = {
-        **trivy_env,
-        "FURTHER_PARAMETERS": "--by-cve",
-        "GRYPE_DB_CACHE_DIR": "/tmp/grype_db_cache",
-        "REPORT_NAME": "grype.json",
-    }
-    cmd = _build_scanner_cmd("/entrypoints/entrypoint_grype_sbom.sh", grype_env)
-    subprocess.run(cmd)
+    env = _build_base_env(secobserve_api_token, product_name, branch_name)
+    env["TARGET"] = f"/tmp/{file_name}"
+    _run_combined_scan(env, "sbom")
 
 
 _ARCH_SUFFIXES = ("-amd64", "-arm64")
@@ -545,21 +574,9 @@ def scan_image(
         print("No SBOM found, falling back to image mode")
         mode = "image"  # fallback to image mode if no SBOM is available
 
-    trivy_env = _build_base_env(secobserve_api_token, product_name, branch_name)
-    trivy_env["TARGET"] = image if mode == "image" else "/tmp/bom.json"
-
-    cmd = _build_scanner_cmd(f"/entrypoints/entrypoint_trivy_{mode}.sh", trivy_env)
-    print(" ".join(cmd))
-    subprocess.run(cmd)
-
-    grype_env = {
-        **trivy_env,
-        "FURTHER_PARAMETERS": "--by-cve",
-        "GRYPE_DB_CACHE_DIR": "/tmp/grype_db_cache",
-        "REPORT_NAME": "grype.json",
-    }
-    cmd = _build_scanner_cmd(f"/entrypoints/entrypoint_grype_{mode}.sh", grype_env)
-    subprocess.run(cmd)
+    env = _build_base_env(secobserve_api_token, product_name, branch_name)
+    env["TARGET"] = image if mode == "image" else "/tmp/bom.json"
+    _run_combined_scan(env, mode)
 
 
 if __name__ == "__main__":
