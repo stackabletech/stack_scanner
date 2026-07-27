@@ -264,7 +264,7 @@ _TRIVY_REPORT = "trivy.json"
 _GRYPE_REPORT = "grype.json"
 
 
-def _combined_scan_script(mode: str) -> str:
+def _combined_scan_script(env: dict, mode: str) -> str:
     """Return a shell script that scans with Trivy and Grype, then uploads results.
 
     Trivy and Grype scan the same target independently, so they are launched
@@ -279,8 +279,11 @@ def _combined_scan_script(mode: str) -> str:
 
     The existing per-scanner entrypoints are reused (with ``SO_UPLOAD=false`` so
     they only scan) to avoid duplicating the scanner invocation flags here.
+
+    In ``sbom`` mode the target itself is a CycloneDX SBOM, so it is additionally
+    uploaded to SecObserve. In ``image`` mode there is no SBOM file to upload.
     """
-    return (
+    script = (
         "export TRIVY_NO_PROGRESS=true\n"
         f"SO_UPLOAD=false REPORT_NAME={_TRIVY_REPORT} /entrypoints/entrypoint_trivy_{mode}.sh &\n"
         "trivy_pid=$!\n"
@@ -293,6 +296,9 @@ def _combined_scan_script(mode: str) -> str:
         f"if [ -f {_GRYPE_REPORT} ]; then SO_FILE_NAME={_GRYPE_REPORT} SO_PARSER_NAME=CycloneDX "
         'file_upload_observations.sh; else echo "WARNING: no Grype report to upload"; fi\n'
     )
+    if mode == "sbom":
+        script += f"SO_FILE_NAME={env.get('TARGET')} file_upload_sbom.sh\n"
+    return script
 
 
 def _run_combined_scan(env: dict, mode: str) -> None:
@@ -306,7 +312,7 @@ def _run_combined_scan(env: dict, mode: str) -> None:
     for key, value in env.items():
         cmd.extend(["-e", f"{key}={value}"])
     cmd.append(SECOBSERVE_SCANNER_IMAGE)
-    cmd.extend(["-c", _combined_scan_script(mode)])
+    cmd.extend(["-c", _combined_scan_script(env, mode)])
 
     print(f"docker run (combined trivy+grype, {mode} mode) TARGET={env.get('TARGET')}")
     subprocess.run(cmd)
