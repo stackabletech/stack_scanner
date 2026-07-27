@@ -28,6 +28,7 @@ excluded_products = [
 
 REGISTRY_URL = "oci.stackable.tech"
 HARBOR_API_BASE = f"https://{REGISTRY_URL}/api/v2.0"
+SDP_PROJECT = "sdp"
 MAX_AGE_DAYS = 180
 SECOBSERVE_API_BASE_URL = "https://secobserve-backend.stackable.tech"
 SECOBSERVE_SCANNER_IMAGE = "oci.stackable.tech/stackable/secobserve-scanners:latest"
@@ -149,6 +150,77 @@ def get_harbor_tags(
             latest_tag = artifact_tags[0]
 
     return recent_tags, latest_tag
+
+
+def get_project_repositories(project: str) -> set[str] | None:
+    """Return all repository names of a Harbor project, without the project prefix.
+
+    Names are relative to the project, so ``sdp/testing-tools/hive`` is returned
+    as ``testing-tools/hive``. Returns None when the Harbor API is unreachable.
+    """
+    repositories: set[str] = set()
+    prefix = f"{project}/"
+    page = 1
+    page_size = 100
+
+    while True:
+        result = harbor_api_request(
+            f"/projects/{project}/repositories",
+            {"page": page, "page_size": page_size},
+        )
+        if result is None:
+            return None
+
+        if not result:
+            break
+
+        for repository in result:
+            repositories.add(repository["name"].removeprefix(prefix))
+
+        if len(result) < page_size:
+            break
+        page += 1
+
+    return repositories
+
+
+_sdp_repositories: set[str] | None = None
+_sdp_repositories_loaded = False
+
+
+def repository_exists(repository: str) -> bool:
+    """Check whether a repository is published in the SDP Harbor project.
+
+    ``cargo boil image list`` recurses into build-only local images such as
+    ``hadoop/hadoop`` or ``hbase/hbase-opa-authorizer``, which are never pushed to
+    the registry. Attempting to scan them wastes a cosign verification, a
+    container start and two rejected uploads each, which added up to roughly an
+    eighth of the total scan time.
+
+    The repository list is fetched once and cached. If Harbor is unreachable
+    everything is let through, so an API outage degrades to scanning too much
+    rather than silently scanning nothing.
+    """
+    global _sdp_repositories, _sdp_repositories_loaded
+
+    if not _sdp_repositories_loaded:
+        _sdp_repositories = get_project_repositories(SDP_PROJECT)
+        _sdp_repositories_loaded = True
+        if _sdp_repositories is None:
+            print(
+                "WARNING: Could not list Harbor repositories, "
+                "scanning all images without filtering."
+            )
+        else:
+            print(
+                f"Found {len(_sdp_repositories)} repositories in "
+                f"Harbor project {SDP_PROJECT}"
+            )
+
+    if _sdp_repositories is None:
+        return True
+
+    return repository in _sdp_repositories
 
 
 def get_latest_releases(count: int, docker_images_dir: str = "docker-images") -> list[str]:
@@ -447,6 +519,46 @@ def main():
         scan_release(secobserve_api_token, release)
 
 
+def _load_product_versions() -> dict[str, list[str]]:
+    """Return a mapping of product image name to product versions.
+
+    Older docker-images revisions configure products in ``conf.py``, newer ones in
+    boil configuration files, so both sources are supported.
+    """
+    conf_py_path = "docker-images/conf.py"
+    if os.path.exists(conf_py_path):
+        print("Using conf.py based configuration")
+        sys.path.insert(0, os.path.abspath("docker-images"))
+        from image_tools.args import load_configuration
+
+        config = load_configuration(conf_py_path)
+        return {
+            product["name"]: [version["product"] for version in product.get("versions", [])]
+            for product in config.products
+        }
+
+    print("Using boil based configuration")
+    # boil >= 0.2.0 uses "image list", older versions use "show images"
+    result = subprocess.run(
+        ["cargo", "boil", "image", "list"],
+        cwd="docker-images",
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        result = subprocess.run(
+            ["cargo", "boil", "show", "images"],
+            cwd="docker-images",
+            capture_output=True,
+            text=True,
+        )
+    if result.returncode != 0:
+        print("Failed to get product versions:", result.stderr)
+        sys.exit(1)
+
+    return json.loads(result.stdout)
+
+
 def scan_release(secobserve_api_token: str, release: str, upload_sbom: Optional[bool] = False) -> None:
     """Scan all operator and product images of a single SDP release."""
     checkout = "main" if release == DEV_RELEASE else "tags/" + release
@@ -474,75 +586,40 @@ def scan_release(secobserve_api_token: str, release: str, upload_sbom: Optional[
         "zookeeper",
     ]
 
-    # Load product version configuration once, outside the arch loop.
-    conf_py_path = "docker-images/conf.py"
-    if os.path.exists(conf_py_path):
-        print("Using conf.py based configuration")
-        sys.path.insert(0, os.path.abspath("docker-images"))
-        from image_tools.args import load_configuration
-        product_versions_config = load_configuration(conf_py_path)
-        use_conf_py = True
-    else:
-        print("Using boil based configuration")
-        # boil >= 0.2.0 uses "image list", older versions use "show images"
-        result = subprocess.run(
-            ["cargo", "boil", "image", "list"],
-            cwd="docker-images",
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            result = subprocess.run(
-                ["cargo", "boil", "show", "images"],
-                cwd="docker-images",
-                capture_output=True,
-                text=True,
-            )
-        if result.returncode != 0:
-            print("Failed to get product versions:", result.stderr)
-            sys.exit(1)
-        product_versions = json.loads(result.stdout)
-        use_conf_py = False
+    # Resolve the product images once, outside the arch loop, so that excluded and
+    # unpublished products are reported a single time per release.
+    products: list[tuple[str, str]] = []
+    for product_name, versions in _load_product_versions().items():
+        if product_name in excluded_products:
+            continue
+        if not repository_exists(product_name):
+            print(f"Skipping {product_name}: not published to {REGISTRY_URL}/{SDP_PROJECT}")
+            continue
+        products.extend((product_name, version) for version in versions)
+
+    print(f"Scanning {release}: {len(operators)} operator and "
+          f"{len(products)} product image(s) per arch")
 
     for arch in ["amd64", "arm64"]:
         for operator_name in operators:
             product_name = f"{operator_name}-operator"
             scan_image(
                 secobserve_api_token,
-                f"{REGISTRY_URL}/sdp/{product_name}:{release}-{arch}",
+                f"{REGISTRY_URL}/{SDP_PROJECT}/{product_name}:{release}-{arch}",
                 product_name,
                 f"{release}-{arch}",
                 upload_sbom,
             )
 
-        if use_conf_py:
-            for product in product_versions_config.products:
-                product_name: str = product["name"]
-                if product_name in excluded_products:
-                    continue
-                for version_dict in product.get("versions", []):
-                    version: str = version_dict["product"]
-                    product_version = f"{version}-stackable{release}"
-                    scan_image(
-                        secobserve_api_token,
-                        f"{REGISTRY_URL}/sdp/{product_name}:{product_version}-{arch}",
-                        product_name,
-                        f"{product_version}-{arch}",
-                        upload_sbom,
-                    )
-        else:
-            for product_name, versions in product_versions.items():
-                if product_name in excluded_products:
-                    continue
-                for version in versions:
-                    product_version = f"{version}-stackable{release}"
-                    scan_image(
-                        secobserve_api_token,
-                        f"{REGISTRY_URL}/sdp/{product_name}:{product_version}-{arch}",
-                        product_name,
-                        f"{product_version}-{arch}",
-                        upload_sbom,
-                    )
+        for product_name, version in products:
+            product_version = f"{version}-stackable{release}"
+            scan_image(
+                secobserve_api_token,
+                f"{REGISTRY_URL}/{SDP_PROJECT}/{product_name}:{product_version}-{arch}",
+                product_name,
+                f"{product_version}-{arch}",
+                upload_sbom,
+            )
 
     # Scan additional infrastructure/third-party images using Harbor API tag discovery.
     # This runs once (not per-arch) because tags from Harbor include the arch suffix
