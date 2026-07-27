@@ -491,10 +491,11 @@ def main():
     os.makedirs("/tmp/stackable/trivy_cache", exist_ok=True)
     os.makedirs("/tmp/stackable/grype_db_cache", exist_ok=True)
 
-    # dump argv to console
-    print(sys.argv)
+    # Dump the arguments to the console, with the API token in argv[2] left out.
+    print([sys.argv[0], sys.argv[1], "<token>", *sys.argv[3:]])
+    secobserve_api_token = sys.argv[2]
+
     if sys.argv[1] == "scan-image":
-        secobserve_api_token = sys.argv[2]
         image = sys.argv[3]
         product_name = sys.argv[4]
         scan_image(secobserve_api_token, image, product_name, sys.argv[5])
@@ -503,18 +504,15 @@ def main():
         # Scan the dev release plus the current and previous stable releases.
         # The stable releases are discovered dynamically from the docker-images
         # git tags so the workflow does not need updating on every release.
-        secobserve_api_token = sys.argv[2]
         releases = [DEV_RELEASE] + get_latest_releases(2)
         print(f"Scanning releases: {releases}")
         for release in releases:
             scan_release(secobserve_api_token, release)
         sys.exit(0)
     elif sys.argv[1] == "upload-sbom-release":
-        secobserve_api_token = sys.argv[2]
         release = sys.argv[3]
         scan_release(secobserve_api_token, release, upload_sbom=True)
     else:
-        secobserve_api_token = sys.argv[2]
         release = sys.argv[3]
         scan_release(secobserve_api_token, release)
 
