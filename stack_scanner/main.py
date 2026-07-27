@@ -27,7 +27,7 @@ REGISTRY_URL = "oci.stackable.tech"
 HARBOR_API_BASE = f"https://{REGISTRY_URL}/api/v2.0"
 MAX_AGE_DAYS = 180
 SECOBSERVE_API_BASE_URL = "https://secobserve-backend.stackable.tech"
-SECOBSERVE_SCANNER_IMAGE = "oci.stackable.tech/sandbox/secobserve-scanners:latest"
+SECOBSERVE_SCANNER_IMAGE = "oci.stackable.tech/stackable/secobserve-scanners:latest"
 DEV_RELEASE = "0.0.0-dev"
 
 _PR_TAG_RE = re.compile(r"-pr\d+")
