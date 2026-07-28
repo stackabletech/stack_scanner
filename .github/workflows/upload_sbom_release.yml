@@ -33,6 +33,6 @@ jobs:
           chmod +x /usr/local/bin/cyclonedx
       - name: Install deps
         run: poetry install
-      - name: Scan release
+      - name: Upload SBOMs for release
         id: scan
         run: poetry run python stack_scanner/main.py upload-sbom-release ${{ secrets.SECOBSERVE_API_TOKEN }} ${{ github.event.inputs.release }}
