@@ -10,6 +10,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from typing import Optional
+
+
 excluded_products = [
     "hello-world",
     "java-base",
@@ -264,7 +267,7 @@ _TRIVY_REPORT = "trivy.json"
 _GRYPE_REPORT = "grype.json"
 
 
-def _combined_scan_script(env: dict, mode: str) -> str:
+def _combined_scan_script(env: dict, mode: str, upload_sbom: Optional[bool] = False) -> str:
     """Return a shell script that scans with Trivy and Grype, then uploads results.
 
     Trivy and Grype scan the same target independently, so they are launched
@@ -279,29 +282,33 @@ def _combined_scan_script(env: dict, mode: str) -> str:
 
     The existing per-scanner entrypoints are reused (with ``SO_UPLOAD=false`` so
     they only scan) to avoid duplicating the scanner invocation flags here.
-
-    In ``sbom`` mode the target itself is a CycloneDX SBOM, so it is additionally
-    uploaded to SecObserve. In ``image`` mode there is no SBOM file to upload.
     """
-    script = (
-        "export TRIVY_NO_PROGRESS=true\n"
-        f"SO_UPLOAD=false REPORT_NAME={_TRIVY_REPORT} /entrypoints/entrypoint_trivy_{mode}.sh &\n"
-        "trivy_pid=$!\n"
-        f"SO_UPLOAD=false REPORT_NAME={_GRYPE_REPORT} /entrypoints/entrypoint_grype_{mode}.sh &\n"
-        "grype_pid=$!\n"
-        'wait "$trivy_pid" || echo "WARNING: Trivy scan failed"\n'
-        'wait "$grype_pid" || echo "WARNING: Grype scan failed"\n'
-        f"if [ -f {_TRIVY_REPORT} ]; then SO_FILE_NAME={_TRIVY_REPORT} SO_PARSER_NAME=CycloneDX "
-        'file_upload_observations.sh; else echo "WARNING: no Trivy report to upload"; fi\n'
-        f"if [ -f {_GRYPE_REPORT} ]; then SO_FILE_NAME={_GRYPE_REPORT} SO_PARSER_NAME=CycloneDX "
-        'file_upload_observations.sh; else echo "WARNING: no Grype report to upload"; fi\n'
-    )
-    if mode == "sbom":
-        script += f"SO_FILE_NAME={env.get('TARGET')} file_upload_sbom.sh\n"
+
+    if upload_sbom:
+        if mode == "sbom":
+            script = f"SO_FILE_NAME={env.get('TARGET')} file_upload_sbom.sh\n"
+        else:
+            print(f"Can't upload SBOM because mode is {mode}")
+            script = ""
+    else:
+        script = (
+            "export TRIVY_NO_PROGRESS=true\n"
+            f"SO_UPLOAD=false REPORT_NAME={_TRIVY_REPORT} /entrypoints/entrypoint_trivy_{mode}.sh &\n"
+            "trivy_pid=$!\n"
+            f"SO_UPLOAD=false REPORT_NAME={_GRYPE_REPORT} /entrypoints/entrypoint_grype_{mode}.sh &\n"
+            "grype_pid=$!\n"
+            'wait "$trivy_pid" || echo "WARNING: Trivy scan failed"\n'
+            'wait "$grype_pid" || echo "WARNING: Grype scan failed"\n'
+            f"if [ -f {_TRIVY_REPORT} ]; then SO_FILE_NAME={_TRIVY_REPORT} SO_PARSER_NAME=CycloneDX "
+            'file_upload_observations.sh; else echo "WARNING: no Trivy report to upload"; fi\n'
+            f"if [ -f {_GRYPE_REPORT} ]; then SO_FILE_NAME={_GRYPE_REPORT} SO_PARSER_NAME=CycloneDX "
+            'file_upload_observations.sh; else echo "WARNING: no Grype report to upload"; fi\n'
+        )
+
     return script
 
 
-def _run_combined_scan(env: dict, mode: str) -> None:
+def _run_combined_scan(env: dict, mode: str, upload_sbom: Optional[bool] = False) -> None:
     """Run Trivy and Grype in a single container for one target, then upload."""
     cmd = [
         "docker", "run",
@@ -312,7 +319,7 @@ def _run_combined_scan(env: dict, mode: str) -> None:
     for key, value in env.items():
         cmd.extend(["-e", f"{key}={value}"])
     cmd.append(SECOBSERVE_SCANNER_IMAGE)
-    cmd.extend(["-c", _combined_scan_script(env, mode)])
+    cmd.extend(["-c", _combined_scan_script(env, mode, upload_sbom)])
 
     print(f"docker run (combined trivy+grype, {mode} mode) TARGET={env.get('TARGET')}")
     subprocess.run(cmd)
@@ -429,13 +436,17 @@ def main():
         for release in releases:
             scan_release(secobserve_api_token, release)
         sys.exit(0)
+    elif sys.argv[1] == "upload-sbom-release":
+        secobserve_api_token = sys.argv[2]
+        release = sys.argv[3]
+        scan_release(secobserve_api_token, release, upload_sbom=True)
     else:
         secobserve_api_token = sys.argv[2]
         release = sys.argv[3]
         scan_release(secobserve_api_token, release)
 
 
-def scan_release(secobserve_api_token: str, release: str) -> None:
+def scan_release(secobserve_api_token: str, release: str, upload_sbom: Optional[bool] = False) -> None:
     """Scan all operator and product images of a single SDP release."""
     checkout = "main" if release == DEV_RELEASE else "tags/" + release
 
@@ -500,6 +511,7 @@ def scan_release(secobserve_api_token: str, release: str) -> None:
                 f"{REGISTRY_URL}/sdp/{product_name}:{release}-{arch}",
                 product_name,
                 f"{release}-{arch}",
+                upload_sbom,
             )
 
         if use_conf_py:
@@ -515,6 +527,7 @@ def scan_release(secobserve_api_token: str, release: str) -> None:
                         f"{REGISTRY_URL}/sdp/{product_name}:{product_version}-{arch}",
                         product_name,
                         f"{product_version}-{arch}",
+                        upload_sbom,
                     )
         else:
             for product_name, versions in product_versions.items():
@@ -527,6 +540,7 @@ def scan_release(secobserve_api_token: str, release: str) -> None:
                         f"{REGISTRY_URL}/sdp/{product_name}:{product_version}-{arch}",
                         product_name,
                         f"{product_version}-{arch}",
+                        upload_sbom,
                     )
 
     # Scan additional infrastructure/third-party images using Harbor API tag discovery.
@@ -546,6 +560,7 @@ def scan_image(
     image: str,
     product_name: str,
     branch_name: str,
+    upload_sbom: Optional[bool] = False,
 ) -> None:
     mode = "sbom"
     extract_sbom_cmd = [
@@ -582,7 +597,7 @@ def scan_image(
 
     env = _build_base_env(secobserve_api_token, product_name, branch_name)
     env["TARGET"] = image if mode == "image" else "/tmp/bom.json"
-    _run_combined_scan(env, mode)
+    _run_combined_scan(env, mode, upload_sbom)
 
 
 if __name__ == "__main__":
