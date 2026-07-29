@@ -195,7 +195,7 @@ _STACKABLECTL_SBOMS = [
 ]
 
 
-def scan_stackablectl(secobserve_api_token: str) -> None:
+def scan_stackablectl(secobserve_api_token: str, upload_sbom: Optional[bool] = False) -> None:
     """Download and scan the latest stackablectl SBOMs from GitHub releases.
 
     The stackable-cockpit project publishes CycloneDX SBOMs alongside each
@@ -245,7 +245,7 @@ def scan_stackablectl(secobserve_api_token: str) -> None:
             continue
         print(f"Converted {xml_path} to {json_path}")
 
-        scan_sbom(secobserve_api_token, json_name, "stackablectl", version)
+        scan_sbom(secobserve_api_token, json_name, "stackablectl", version, upload_sbom=upload_sbom)
 
 
 def _build_base_env(secobserve_api_token: str, product_name: str, branch_name: str) -> dict:
@@ -330,6 +330,7 @@ def scan_sbom(
     file_name: str,
     product_name: str,
     branch_name: str,
+    upload_sbom: Optional[bool] = False,
 ) -> None:
     """Scan a local SBOM file using Trivy and Grype in SBOM mode.
 
@@ -338,7 +339,7 @@ def scan_sbom(
     """
     env = _build_base_env(secobserve_api_token, product_name, branch_name)
     env["TARGET"] = f"/tmp/{file_name}"
-    _run_combined_scan(env, "sbom")
+    _run_combined_scan(env, "sbom", upload_sbom=upload_sbom)
 
 
 _ARCH_SUFFIXES = ("-amd64", "-arm64")
@@ -359,7 +360,7 @@ def _filter_redundant_manifest_tags(tags: list[str]) -> list[str]:
     return [tag for tag in tags if tag not in arch_bases or tag.endswith(_ARCH_SUFFIXES)]
 
 
-def scan_additional_images(secobserve_api_token: str) -> None:
+def scan_additional_images(secobserve_api_token: str, upload_sbom: Optional[bool] = False) -> None:
     """Scan additional images that are not part of the regular versioned Stackable release.
 
     For each image the Harbor API is queried for tags pushed within the last
@@ -398,7 +399,7 @@ def scan_additional_images(secobserve_api_token: str) -> None:
 
         for tag in tags:
             image = f"{REGISTRY_URL}/{project}/{repository}:{tag}"
-            scan_image(secobserve_api_token, image, product_name, tag)
+            scan_image(secobserve_api_token, image, product_name, tag, upload_sbom=upload_sbom)
 
 
 def main():
@@ -546,13 +547,13 @@ def scan_release(secobserve_api_token: str, release: str, upload_sbom: Optional[
     # Scan additional infrastructure/third-party images using Harbor API tag discovery.
     # This runs once (not per-arch) because tags from Harbor include the arch suffix
     # already or are arch-agnostic manifests.
-    scan_additional_images(secobserve_api_token)
+    scan_additional_images(secobserve_api_token, upload_sbom=upload_sbom)
 
     # Scan the latest stackablectl binary from GitHub releases.
     # Only run for the dev release to avoid redundant scans when multiple releases
     # are processed in the same workflow run (stackablectl is release-independent).
     if release == DEV_RELEASE:
-        scan_stackablectl(secobserve_api_token)
+        scan_stackablectl(secobserve_api_token, upload_sbom=upload_sbom)
 
 
 def scan_image(
