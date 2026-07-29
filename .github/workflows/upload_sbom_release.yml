@@ -1,4 +1,4 @@
-name: Scan specific release
+name: Upload SBOMs for specific release
 on:
   workflow_dispatch:
     inputs:
