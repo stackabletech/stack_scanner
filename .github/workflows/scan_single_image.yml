@@ -12,14 +12,20 @@ on:
         description: "Location of the image (example: oci.stackable.tech/sdp/hbase:2.4.17-stackable24.7.0-amd64). Please use the tag for the image itself (usually one including the CPU architecture) and not the tag for the manifest list, since the tag for the manifest list won't have an SBOM attached."
         required: true
 
+permissions: {}
+
 jobs:
   scan_image:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Cosign
-        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad # v4.0.0
-      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: 3.11
       - name: Run image
@@ -30,4 +36,8 @@ jobs:
         run: poetry install
       - name: Scan image
         id: scan
-        run: poetry run python stack_scanner/main.py scan-image ${{ secrets.SECOBSERVE_API_TOKEN }} ${{ github.event.inputs.image }} ${{ github.event.inputs.product_name }} ${{ github.event.inputs.product_version }}
+        env:
+          IMAGE: ${{ github.event.inputs.image }}
+          PRODUCT_NAME: ${{ github.event.inputs.product_name }}
+          PRODUCT_VERSION: ${{ github.event.inputs.product_version }}
+        run: poetry run python stack_scanner/main.py scan-image ${{ secrets.SECOBSERVE_API_TOKEN }} "$IMAGE" "$PRODUCT_NAME" "$PRODUCT_VERSION"
