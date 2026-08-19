@@ -8,6 +8,8 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.11"
 image-tools-stackabletech = "^0.0.9"
+# Used to read the image tags deployed by the operator Helm charts.
+pyyaml = "^6.0"
 
 
 [build-system]
