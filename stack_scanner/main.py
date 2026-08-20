@@ -13,17 +13,31 @@ import urllib.request
 from typing import Optional
 
 
+# Product images that are not scanned, either because they never run as part of a
+# Stackable Data Platform deployment (build and test images), or because their
+# contents are a strict subset of a product image that is already scanned.
+#
+# The base and subset images are not skipped to save time only: scanning them would
+# report the same components a second time, under a product name that no
+# deployment actually runs.
 excluded_products = [
-    "hello-world",
+    # Build-only base images, never pushed to the registry.
     "java-base",
-    "testing-tools",
     "stackable-base",
-    "trino-cli",
-    "vector",
-    "kcat",
-    "kafka-testing-tools",
+    # Only used to build and test the platform, never deployed with it.
     "java-devel",
-    "statsd_exporter",
+    "testing-tools",
+    "kafka-testing-tools",
+    # java-base is built on top of vector, and the products that do not use
+    # java-base are built on top of vector directly, so every component of the
+    # vector image is already reported by the product images.
+    "vector",
+    # Built on top of java-base, and its only other content is the Trino CLI,
+    # which its SBOM does not cover: the CLI is downloaded as an extensionless
+    # file, so no SBOM generator recognises it as a jar. Scanning the image would
+    # therefore report the java-base and vector components a second time without
+    # covering the CLI itself.
+    "trino-cli",
 ]
 
 REGISTRY_URL = "oci.stackable.tech"
@@ -36,19 +50,128 @@ DEV_RELEASE = "0.0.0-dev"
 
 _PR_TAG_RE = re.compile(r"-pr\d+")
 
+# Cosign stores signatures, attestations and SBOMs as separate artifacts tagged
+# "sha256-<digest>.sig"/".att"/".sbom". They are not container images and must not
+# be scanned.
+_COSIGN_TAG_RE = re.compile(r"^sha256-[0-9a-f]{64}\.(sig|att|sbom)$")
+
 # Stable release tags follow calendar versioning, e.g. "26.3.0". Pre-release tags
 # such as "26.3.0-rc1" or "24.11.0-test1" carry a suffix and are excluded.
 _STABLE_RELEASE_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
 # Additional images to scan that are not part of the regular versioned release.
 # These are third-party or infrastructure images referenced by the Stackable platform.
+#
+# The CSI sidecars are mirrored into our registry only occasionally (see the
+# mirror.yaml workflow in docker-images), so their Harbor push_time says when the
+# mirror ran, not which tag the platform actually deploys. For those images the
+# deployed tag is read from the Helm values of the operators that run them (see
+# "helm_values_image" and _CSI_SIDECAR_SOURCES) and scanned in addition to
+# whatever recent tags Harbor reports, so both the shipped version and a freshly
+# mirrored candidate are covered.
 ADDITIONAL_IMAGES = [
-    {"project": "sdp", "repository": "csi-node-driver-registrar", "product_name": "csi-node-driver-registrar"},
-    {"project": "sdp", "repository": "csi-provisioner", "product_name": "csi-provisioner"},
-    {"project": "sdp", "repository": "git-sync/git-sync", "product_name": "git-sync"},
+    {
+        "project": "sdp",
+        "repository": "sig-storage/csi-node-driver-registrar",
+        "product_name": "csi-node-driver-registrar",
+        "helm_values_image": "csi-node-driver-registrar",
+    },
+    {
+        "project": "sdp",
+        "repository": "sig-storage/csi-provisioner",
+        "product_name": "csi-provisioner",
+        "helm_values_image": "csi-provisioner",
+    },
     {"project": "sdp", "repository": "cockpit", "product_name": "cockpit"},
-    {"project": "sdp", "repository": "spark-connect-client", "product_name": "spark-connect-client"},
 ]
+
+
+# The CSI sidecars are deployed by the secret- and listener-operator, which pin the
+# tag they run in their Helm values. Mapping each image to the operators and the
+# values path holding its tag lets the deployed tags be read from the source of
+# truth instead of being hardcoded here.
+_CSI_SIDECAR_SOURCES = {
+    "csi-provisioner": [
+        ("secret-operator", ("csiNodeDriver", "externalProvisioner")),
+        ("listener-operator", ("csiProvisioner", "externalProvisioner")),
+    ],
+    "csi-node-driver-registrar": [
+        ("secret-operator", ("csiNodeDriver", "nodeDriverRegistrar")),
+        ("listener-operator", ("csiNodeDriver", "nodeDriverRegistrar")),
+    ],
+}
+
+_HELM_VALUES_URL = (
+    "https://raw.githubusercontent.com/stackabletech/{operator}/{ref}"
+    "/deploy/helm/{operator}/values.yaml"
+)
+
+_helm_values_cache: dict[tuple[str, str], dict | None] = {}
+
+
+def _get_operator_helm_values(operator: str, release: str) -> dict | None:
+    """Fetch and parse the Helm values of an operator for a given release.
+
+    The dev release is read from ``main``, every other release from its git tag, so
+    the tags reported for a release are the ones that release actually deploys.
+    Returns None when the file cannot be fetched or parsed.
+    """
+    cache_key = (operator, release)
+    if cache_key in _helm_values_cache:
+        return _helm_values_cache[cache_key]
+
+    ref = "refs/heads/main" if release == DEV_RELEASE else f"refs/tags/{release}"
+    url = _HELM_VALUES_URL.format(operator=operator, ref=ref)
+
+    values: dict | None = None
+    try:
+        import yaml
+
+        request = urllib.request.Request(url)
+        request.add_header("User-Agent", "stack-scanner")
+        with urllib.request.urlopen(request) as response:
+            values = yaml.safe_load(response.read())
+    except ImportError:
+        print("WARNING: PyYAML is not available, cannot read operator Helm values.")
+    except (urllib.error.URLError, ValueError) as error:
+        print(f"WARNING: Could not fetch Helm values from {url}: {error}")
+
+    _helm_values_cache[cache_key] = values
+    return values
+
+
+def get_deployed_sidecar_tags(image_name: str, release: str) -> list[str]:
+    """Return the tags a given release deploys for a sidecar image.
+
+    The tags of all operators running the image are collected, because nothing
+    guarantees that they pin the same version. An empty list is returned when no
+    tag could be determined, in which case the caller falls back to whatever tags
+    Harbor reports.
+    """
+    tags: list[str] = []
+
+    for operator, values_path in _CSI_SIDECAR_SOURCES.get(image_name, []):
+        values = _get_operator_helm_values(operator, release)
+        if values is None:
+            continue
+
+        node: object = values
+        for key in (*values_path, "image", "tag"):
+            if not isinstance(node, dict) or key not in node:
+                print(
+                    f"WARNING: {'.'.join(values_path)}.image.tag not found in the "
+                    f"{operator} Helm values of {release}."
+                )
+                node = None
+                break
+            node = node[key]
+
+        if isinstance(node, str):
+            print(f"{operator} ({release}) deploys {image_name}:{node}")
+            if node not in tags:
+                tags.append(node)
+
+    return tags
 
 
 def harbor_api_request(path: str, params: dict | None = None) -> list | dict | None:
@@ -102,6 +225,7 @@ def _iter_harbor_tagged_artifacts(
                 tag["name"]
                 for tag in (artifact.get("tags") or [])
                 if not _PR_TAG_RE.search(tag["name"])
+                and not _COSIGN_TAG_RE.match(tag["name"])
             ]
             if not artifact_tags:
                 continue
@@ -184,12 +308,11 @@ def get_project_repositories(project: str) -> set[str] | None:
     return repositories
 
 
-_sdp_repositories: set[str] | None = None
-_sdp_repositories_loaded = False
+_project_repositories: dict[str, set[str] | None] = {}
 
 
-def repository_exists(repository: str) -> bool:
-    """Check whether a repository is published in the SDP Harbor project.
+def repository_exists(project: str, repository: str) -> bool:
+    """Check whether a repository is published in a Harbor project.
 
     ``cargo boil image list`` recurses into build-only local images such as
     ``hadoop/hadoop`` or ``hbase/hbase-opa-authorizer``, which are never pushed to
@@ -197,30 +320,104 @@ def repository_exists(repository: str) -> bool:
     container start and two rejected uploads each, which added up to roughly an
     eighth of the total scan time.
 
-    The repository list is fetched once and cached. If Harbor is unreachable
-    everything is let through, so an API outage degrades to scanning too much
-    rather than silently scanning nothing.
+    The repository list is fetched once per project and cached. If Harbor is
+    unreachable everything is let through, so an API outage degrades to scanning
+    too much rather than silently scanning nothing.
     """
-    global _sdp_repositories, _sdp_repositories_loaded
-
-    if not _sdp_repositories_loaded:
-        _sdp_repositories = get_project_repositories(SDP_PROJECT)
-        _sdp_repositories_loaded = True
-        if _sdp_repositories is None:
+    if project not in _project_repositories:
+        repositories = get_project_repositories(project)
+        _project_repositories[project] = repositories
+        if repositories is None:
             print(
-                "WARNING: Could not list Harbor repositories, "
-                "scanning all images without filtering."
+                f"WARNING: Could not list the repositories of Harbor project {project}, "
+                "scanning all of its images without filtering."
             )
         else:
-            print(
-                f"Found {len(_sdp_repositories)} repositories in "
-                f"Harbor project {SDP_PROJECT}"
-            )
+            print(f"Found {len(repositories)} repositories in Harbor project {project}")
 
-    if _sdp_repositories is None:
+    repositories = _project_repositories[project]
+    if repositories is None:
         return True
 
-    return repository in _sdp_repositories
+    return repository in repositories
+
+
+# Almost every image is published to the SDP project, so only the exceptions
+# configure something else. The result is cached per image name and the cache is
+# cleared whenever docker-images is checked out at another release, because an
+# image can be published to another project in another release.
+_image_projects: dict[str, str] = {}
+
+_REGISTRY_NAMESPACE_RE = re.compile(r"^\s*registry-namespace:\s*(\S+)\s*$", re.MULTILINE)
+
+
+def _project_from_boil_config(image_name: str, docker_images_dir: str) -> str | None:
+    """Return the registry namespace from the boil config of an image, if configured."""
+    config_path = os.path.join(docker_images_dir, image_name, "boil-config.toml")
+    if not os.path.exists(config_path):
+        return None
+
+    try:
+        import tomllib
+
+        with open(config_path, "rb") as config_file:
+            config = tomllib.load(config_file)
+    except (ImportError, ValueError, OSError) as error:
+        print(f"WARNING: Could not read {config_path}: {error}")
+        return None
+
+    registry = config.get("metadata", {}).get("registries", {}).get(REGISTRY_URL, {})
+    return registry.get("namespace")
+
+
+def _project_from_build_workflow(image_name: str, docker_images_dir: str) -> str | None:
+    """Return the registry namespace the build workflow of an image pushes to.
+
+    Some workflow file names spell the image name with underscores, so both
+    spellings are tried.
+    """
+    workflow_dir = os.path.join(docker_images_dir, ".github", "workflows")
+    for name in {image_name, image_name.replace("-", "_")}:
+        workflow_path = os.path.join(workflow_dir, f"build_{name}.yaml")
+        if not os.path.exists(workflow_path):
+            continue
+
+        try:
+            with open(workflow_path) as workflow_file:
+                match = _REGISTRY_NAMESPACE_RE.search(workflow_file.read())
+        except OSError as error:
+            print(f"WARNING: Could not read {workflow_path}: {error}")
+            continue
+
+        if match:
+            return match.group(1)
+
+    return None
+
+
+def get_image_project(image_name: str, docker_images_dir: str = "docker-images") -> str:
+    """Return the Harbor project an image is published to.
+
+    The project is the registry namespace the image is pushed to, which is
+    "stackable" for spark-connect-client and "sdp" for every other image at the
+    time of writing. It is read from the boil config of the image, falling back to
+    the build workflow because "metadata.registries" was only introduced after the
+    releases that are still being scanned, and finally to the SDP project.
+    """
+    if image_name in _image_projects:
+        return _image_projects[image_name]
+
+    project = (
+        _project_from_boil_config(image_name, docker_images_dir)
+        or _project_from_build_workflow(image_name, docker_images_dir)
+        or SDP_PROJECT
+    )
+
+    if project != SDP_PROJECT:
+        print(f"{image_name} is published to the Harbor project {project}")
+
+    _image_projects[image_name] = project
+    return project
 
 
 def get_latest_releases(count: int, docker_images_dir: str = "docker-images") -> list[str]:
@@ -432,42 +629,77 @@ def _filter_redundant_manifest_tags(tags: list[str]) -> list[str]:
     return [tag for tag in tags if tag not in arch_bases or tag.endswith(_ARCH_SUFFIXES)]
 
 
-def scan_additional_images(secobserve_api_token: str, upload_sbom: Optional[bool] = False) -> None:
+def scan_additional_images(
+    secobserve_api_token: str, release: str, upload_sbom: Optional[bool] = False
+) -> None:
     """Scan additional images that are not part of the regular versioned Stackable release.
 
     For each image the Harbor API is queried for tags pushed within the last
     MAX_AGE_DAYS days.  If the API is unreachable the image is skipped with a
     warning; if individual artifacts lack push_time metadata their tags are
     included conservatively.
+
+    Images configured with "helm_values_image" additionally get the tag deployed by
+    the given release scanned, see get_deployed_sidecar_tags.
     """
     for image_config in ADDITIONAL_IMAGES:
         project = image_config["project"]
         repository = image_config["repository"]
         product_name = image_config["product_name"]
 
+        helm_values_image = image_config.get("helm_values_image")
+        deployed_tags = (
+            get_deployed_sidecar_tags(helm_values_image, release) if helm_values_image else []
+        )
+        deployed_arch_tags = [
+            f"{tag}{suffix}" for tag in deployed_tags for suffix in _ARCH_SUFFIXES
+        ]
+
         print(f"Querying Harbor API for recent tags of {project}/{repository}...")
         result = get_harbor_tags(project, repository)
 
         if result is None:
+            if not deployed_arch_tags:
+                print(
+                    f"WARNING: Harbor API unavailable for {project}/{repository}. "
+                    "Skipping – re-run once the registry is reachable."
+                )
+                continue
             print(
-                f"WARNING: Harbor API unavailable for {project}/{repository}. "
-                "Skipping – re-run once the registry is reachable."
+                f"WARNING: Harbor API unavailable for {project}/{repository}, "
+                "scanning the deployed tags only."
             )
-            continue
-
-        recent_tags, latest_tag = result
-        if recent_tags:
-            tags = _filter_redundant_manifest_tags(recent_tags)
-            print(f"Found {len(tags)} recent tag(s) for {project}/{repository}: {tags}")
-        elif latest_tag is not None:
-            print(
-                f"No tags pushed within the last {MAX_AGE_DAYS} days for {project}/{repository}, "
-                "falling back to most recently pushed tag."
-            )
-            tags = [latest_tag]
+            tags = deployed_arch_tags
         else:
-            print(f"WARNING: No tagged artifacts found for {project}/{repository}, skipping.")
-            continue
+            recent_tags, latest_tag = result
+            if recent_tags:
+                tags = _filter_redundant_manifest_tags(recent_tags)
+                print(f"Found {len(tags)} recent tag(s) for {project}/{repository}: {tags}")
+            elif latest_tag is not None:
+                print(
+                    f"No tags pushed within the last {MAX_AGE_DAYS} days for {project}/{repository}, "
+                    "falling back to most recently pushed tag."
+                )
+                tags = [latest_tag]
+            elif deployed_arch_tags:
+                print(
+                    f"No tagged artifacts found for {project}/{repository}, "
+                    "scanning the deployed tags only."
+                )
+                tags = []
+            else:
+                print(f"WARNING: No tagged artifacts found for {project}/{repository}, skipping.")
+                continue
+
+            for tag in deployed_arch_tags:
+                if tag not in tags:
+                    print(f"Adding deployed tag {tag} for {project}/{repository}")
+                    tags.append(tag)
+
+            # The fallback path returns a single tag without filtering, so an
+            # arch-less tag can end up next to the arch-specific variants added
+            # above. Re-run the filter over the union to drop it.
+            tags = _filter_redundant_manifest_tags(tags)
 
         for tag in tags:
             image = f"{REGISTRY_URL}/{project}/{repository}:{tag}"
@@ -565,6 +797,9 @@ def scan_release(secobserve_api_token: str, release: str, upload_sbom: Optional[
     subprocess.run(["git", "checkout", checkout], cwd="docker-images")
     subprocess.run(["git", "pull"], cwd="docker-images")
 
+    # The checkout just changed, so projects resolved for another release are stale.
+    _image_projects.clear()
+
     operators = [
         "airflow",
         "commons",
@@ -586,14 +821,15 @@ def scan_release(secobserve_api_token: str, release: str, upload_sbom: Optional[
 
     # Resolve the product images once, outside the arch loop, so that excluded and
     # unpublished products are reported a single time per release.
-    products: list[tuple[str, str]] = []
+    products: list[tuple[str, str, str]] = []
     for product_name, versions in _load_product_versions().items():
         if product_name in excluded_products:
             continue
-        if not repository_exists(product_name):
-            print(f"Skipping {product_name}: not published to {REGISTRY_URL}/{SDP_PROJECT}")
+        project = get_image_project(product_name)
+        if not repository_exists(project, product_name):
+            print(f"Skipping {product_name}: not published to {REGISTRY_URL}/{project}")
             continue
-        products.extend((product_name, version) for version in versions)
+        products.extend((project, product_name, version) for version in versions)
 
     print(f"Scanning {release}: {len(operators)} operator and "
           f"{len(products)} product image(s) per arch")
@@ -609,11 +845,11 @@ def scan_release(secobserve_api_token: str, release: str, upload_sbom: Optional[
                 upload_sbom,
             )
 
-        for product_name, version in products:
+        for project, product_name, version in products:
             product_version = f"{version}-stackable{release}"
             scan_image(
                 secobserve_api_token,
-                f"{REGISTRY_URL}/{SDP_PROJECT}/{product_name}:{product_version}-{arch}",
+                f"{REGISTRY_URL}/{project}/{product_name}:{product_version}-{arch}",
                 product_name,
                 f"{product_version}-{arch}",
                 upload_sbom,
@@ -622,7 +858,7 @@ def scan_release(secobserve_api_token: str, release: str, upload_sbom: Optional[
     # Scan additional infrastructure/third-party images using Harbor API tag discovery.
     # This runs once (not per-arch) because tags from Harbor include the arch suffix
     # already or are arch-agnostic manifests.
-    scan_additional_images(secobserve_api_token, upload_sbom=upload_sbom)
+    scan_additional_images(secobserve_api_token, release, upload_sbom=upload_sbom)
 
     # Scan the latest stackablectl binary from GitHub releases.
     # Only run for the dev release to avoid redundant scans when multiple releases
