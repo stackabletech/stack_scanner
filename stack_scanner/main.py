@@ -213,7 +213,9 @@ def _iter_harbor_tagged_artifacts(
     page_size = 100
 
     while True:
-        artifacts = harbor_api_request(path, {"page": page, "page_size": page_size, "with_tag": "true"})
+        artifacts = harbor_api_request(
+            path, {"page": page, "page_size": page_size, "with_tag": "true"}
+        )
         if artifacts is None:
             return None
 
@@ -234,7 +236,9 @@ def _iter_harbor_tagged_artifacts(
             push_time_str = artifact.get("push_time")
             if push_time_str:
                 try:
-                    push_time = datetime.datetime.fromisoformat(push_time_str.replace("Z", "+00:00"))
+                    push_time = datetime.datetime.fromisoformat(
+                        push_time_str.replace("Z", "+00:00")
+                    )
                 except ValueError:
                     pass
 
@@ -261,7 +265,9 @@ def get_harbor_tags(
     if artifact_data is None:
         return None
 
-    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=MAX_AGE_DAYS)
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+        days=MAX_AGE_DAYS
+    )
     recent_tags: list[str] = []
     latest_tag: str | None = None
     latest_time: datetime.datetime | None = None
@@ -348,7 +354,9 @@ def repository_exists(project: str, repository: str) -> bool:
 # image can be published to another project in another release.
 _image_projects: dict[str, str] = {}
 
-_REGISTRY_NAMESPACE_RE = re.compile(r"^\s*registry-namespace:\s*(\S+)\s*$", re.MULTILINE)
+_REGISTRY_NAMESPACE_RE = re.compile(
+    r"^\s*registry-namespace:\s*(\S+)\s*$", re.MULTILINE
+)
 
 
 def _project_from_boil_config(image_name: str, docker_images_dir: str) -> str | None:
@@ -420,7 +428,9 @@ def get_image_project(image_name: str, docker_images_dir: str = "docker-images")
     return project
 
 
-def get_latest_releases(count: int, docker_images_dir: str = "docker-images") -> list[str]:
+def get_latest_releases(
+    count: int, docker_images_dir: str = "docker-images"
+) -> list[str]:
     """Return the most recent stable SDP release tags from the docker-images repo.
 
     Releases are calendar-versioned git tags (e.g. "26.3.0"). Pre-release tags
@@ -464,7 +474,9 @@ _STACKABLECTL_SBOMS = [
 ]
 
 
-def scan_stackablectl(secobserve_api_token: str, upload_sbom: Optional[bool] = False) -> None:
+def scan_stackablectl(
+    secobserve_api_token: str, upload_sbom: Optional[bool] = False
+) -> None:
     """Download and scan the latest stackablectl SBOMs from GitHub releases.
 
     The stackable-cockpit project publishes CycloneDX SBOMs alongside each
@@ -501,12 +513,18 @@ def scan_stackablectl(secobserve_api_token: str, upload_sbom: Optional[bool] = F
         json_path = f"/tmp/stackable/{json_name}"
         result = subprocess.run(
             [
-                "cyclonedx", "convert",
-                "--input-file", xml_path,
-                "--input-format", "xml",
-                "--output-file", json_path,
-                "--output-format", "json",
-                "--output-version", "v1_5",
+                "cyclonedx",
+                "convert",
+                "--input-file",
+                xml_path,
+                "--input-format",
+                "xml",
+                "--output-file",
+                json_path,
+                "--output-format",
+                "json",
+                "--output-version",
+                "v1_5",
             ],
         )
         if result.returncode != 0:
@@ -514,10 +532,18 @@ def scan_stackablectl(secobserve_api_token: str, upload_sbom: Optional[bool] = F
             continue
         print(f"Converted {xml_path} to {json_path}")
 
-        scan_sbom(secobserve_api_token, json_name, "stackablectl", version, upload_sbom=upload_sbom)
+        scan_sbom(
+            secobserve_api_token,
+            json_name,
+            "stackablectl",
+            version,
+            upload_sbom=upload_sbom,
+        )
 
 
-def _build_base_env(secobserve_api_token: str, product_name: str, branch_name: str) -> dict:
+def _build_base_env(
+    secobserve_api_token: str, product_name: str, branch_name: str
+) -> dict:
     return {
         "SO_PRODUCT_NAME": product_name,
         "SO_API_BASE_URL": SECOBSERVE_API_BASE_URL,
@@ -536,7 +562,9 @@ _TRIVY_REPORT = "trivy.json"
 _GRYPE_REPORT = "grype.json"
 
 
-def _combined_scan_script(env: dict, mode: str, upload_sbom: Optional[bool] = False) -> str:
+def _combined_scan_script(
+    env: dict, mode: str, upload_sbom: Optional[bool] = False
+) -> str:
     """Return a shell script that scans with Trivy and Grype, then uploads results.
 
     Trivy and Grype scan the same target independently, so they are launched
@@ -577,13 +605,19 @@ def _combined_scan_script(env: dict, mode: str, upload_sbom: Optional[bool] = Fa
     return script
 
 
-def _run_combined_scan(env: dict, mode: str, upload_sbom: Optional[bool] = False) -> None:
+def _run_combined_scan(
+    env: dict, mode: str, upload_sbom: Optional[bool] = False
+) -> None:
     """Run Trivy and Grype in a single container for one target, then upload."""
     cmd = [
-        "docker", "run",
-        "--entrypoint", "/bin/sh",
-        "-v", "/tmp/stackable:/tmp",
-        "-v", "/var/run/docker.sock:/var/run/docker.sock",
+        "docker",
+        "run",
+        "--entrypoint",
+        "/bin/sh",
+        "-v",
+        "/tmp/stackable:/tmp",
+        "-v",
+        "/var/run/docker.sock:/var/run/docker.sock",
     ]
     for key, value in env.items():
         cmd.extend(["-e", f"{key}={value}"])
@@ -626,7 +660,9 @@ def _filter_redundant_manifest_tags(tags: list[str]) -> list[str]:
         for suffix in _ARCH_SUFFIXES
         if tag.endswith(suffix)
     }
-    return [tag for tag in tags if tag not in arch_bases or tag.endswith(_ARCH_SUFFIXES)]
+    return [
+        tag for tag in tags if tag not in arch_bases or tag.endswith(_ARCH_SUFFIXES)
+    ]
 
 
 def scan_additional_images(
@@ -649,7 +685,9 @@ def scan_additional_images(
 
         helm_values_image = image_config.get("helm_values_image")
         deployed_tags = (
-            get_deployed_sidecar_tags(helm_values_image, release) if helm_values_image else []
+            get_deployed_sidecar_tags(helm_values_image, release)
+            if helm_values_image
+            else []
         )
         deployed_arch_tags = [
             f"{tag}{suffix}" for tag in deployed_tags for suffix in _ARCH_SUFFIXES
@@ -674,7 +712,9 @@ def scan_additional_images(
             recent_tags, latest_tag = result
             if recent_tags:
                 tags = _filter_redundant_manifest_tags(recent_tags)
-                print(f"Found {len(tags)} recent tag(s) for {project}/{repository}: {tags}")
+                print(
+                    f"Found {len(tags)} recent tag(s) for {project}/{repository}: {tags}"
+                )
             elif latest_tag is not None:
                 print(
                     f"No tags pushed within the last {MAX_AGE_DAYS} days for {project}/{repository}, "
@@ -688,7 +728,9 @@ def scan_additional_images(
                 )
                 tags = []
             else:
-                print(f"WARNING: No tagged artifacts found for {project}/{repository}, skipping.")
+                print(
+                    f"WARNING: No tagged artifacts found for {project}/{repository}, skipping."
+                )
                 continue
 
             for tag in deployed_arch_tags:
@@ -703,7 +745,9 @@ def scan_additional_images(
 
         for tag in tags:
             image = f"{REGISTRY_URL}/{project}/{repository}:{tag}"
-            scan_image(secobserve_api_token, image, product_name, tag, upload_sbom=upload_sbom)
+            scan_image(
+                secobserve_api_token, image, product_name, tag, upload_sbom=upload_sbom
+            )
 
 
 def main():
@@ -763,7 +807,9 @@ def _load_product_versions() -> dict[str, list[str]]:
 
         config = load_configuration(conf_py_path)
         return {
-            product["name"]: [version["product"] for version in product.get("versions", [])]
+            product["name"]: [
+                version["product"] for version in product.get("versions", [])
+            ]
             for product in config.products
         }
 
@@ -789,7 +835,9 @@ def _load_product_versions() -> dict[str, list[str]]:
     return json.loads(result.stdout)
 
 
-def scan_release(secobserve_api_token: str, release: str, upload_sbom: Optional[bool] = False) -> None:
+def scan_release(
+    secobserve_api_token: str, release: str, upload_sbom: Optional[bool] = False
+) -> None:
     """Scan all operator and product images of a single SDP release."""
     checkout = "main" if release == DEV_RELEASE else "tags/" + release
 
@@ -831,8 +879,10 @@ def scan_release(secobserve_api_token: str, release: str, upload_sbom: Optional[
             continue
         products.extend((project, product_name, version) for version in versions)
 
-    print(f"Scanning {release}: {len(operators)} operator and "
-          f"{len(products)} product image(s) per arch")
+    print(
+        f"Scanning {release}: {len(operators)} operator and "
+        f"{len(products)} product image(s) per arch"
+    )
 
     for arch in ["amd64", "arm64"]:
         for operator_name in operators:
@@ -898,7 +948,10 @@ def scan_image(
 
         # Required workaround for Trivy to recognize the OS
         for component in sbom.get("components", []):
-            if component.get("type") == "operating-system" and component.get("name") == "rhel":
+            if (
+                component.get("type") == "operating-system"
+                and component.get("name") == "rhel"
+            ):
                 component["name"] = "redhat"
 
         with open("/tmp/stackable/bom.json", "w") as f:

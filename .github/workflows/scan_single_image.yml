@@ -1,3 +1,4 @@
+---
 name: Scan single image
 on:
   workflow_dispatch:

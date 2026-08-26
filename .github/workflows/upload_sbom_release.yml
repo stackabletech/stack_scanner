@@ -1,3 +1,4 @@
+---
 name: Upload SBOMs for specific release
 on:
   workflow_dispatch:

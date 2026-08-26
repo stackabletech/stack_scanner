@@ -1,3 +1,4 @@
+---
 name: Scan all images
 on:
   workflow_dispatch:

@@ -1,3 +1,4 @@
+---
 name: Scan specific release
 on:
   workflow_dispatch:
