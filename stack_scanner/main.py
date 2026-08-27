@@ -468,77 +468,171 @@ def get_latest_github_release(owner: str, repo: str) -> str | None:
         return None
 
 
-_STACKABLECTL_SBOMS = [
-    "stackablectl-x86_64-unknown-linux-gnu.cdx.xml",
-    "stackablectl-aarch64-unknown-linux-gnu.cdx.xml",
+# CycloneDX SBOMs that are published as GitHub release assets instead of being
+# attached to a container image.
+#
+# Asset file names may contain the placeholders {tag} (the release tag as
+# published, e.g. "v0.1.1") and {version} (the tag without a leading "v").
+#
+# "branch_suffix" is appended to the version to form the SecObserve branch name.
+# It is required whenever a project publishes SBOMs for several build targets
+# whose component sets differ: importing a report resolves every observation of
+# the branch that the report does not contain, so targets sharing a branch would
+# keep resolving each other's findings.
+GITHUB_SBOM_RELEASES = [
+    {
+        "repository": "stackable-cockpit",
+        "product_name": "stackablectl",
+        # Both binaries are built from the same lockfile and their SBOMs list
+        # identical components, so they can share a branch.
+        "assets": [
+            {"file": "stackablectl-x86_64-unknown-linux-gnu.cdx.xml"},
+            {"file": "stackablectl-aarch64-unknown-linux-gnu.cdx.xml"},
+        ],
+    },
+    {
+        "repository": "stackable-odbc-trino",
+        "product_name": "stackable-odbc-trino",
+        # The release also ships an SBOM for the Power BI connector
+        # (StackableTrinoODBC-<version>.cdx.json), which describes the .mez
+        # archive itself and lists no components, so there is nothing to scan.
+        "assets": [
+            {
+                "file": "stackable-odbc-trino-{version}-linux-x64.cdx.json",
+                "branch_suffix": "-linux-x64",
+            },
+            {
+                "file": "stackable-odbc-trino-{version}-windows-x64.cdx.json",
+                "branch_suffix": "-windows-x64",
+            },
+        ],
+    },
+    {
+        "repository": "stackable-odbc-sqlite",
+        "product_name": "stackable-odbc-sqlite",
+        "assets": [
+            {
+                "file": "stackable-odbc-sqlite-{version}-linux-x64.cdx.json",
+                "branch_suffix": "-linux-x64",
+            },
+            {
+                "file": "stackable-odbc-sqlite-{version}-windows-x64.cdx.json",
+                "branch_suffix": "-windows-x64",
+            },
+        ],
+    },
 ]
 
+_GITHUB_SBOM_OWNER = "stackabletech"
 
-def scan_stackablectl(
+# Downloads are kept out of /tmp/stackable itself so that an asset that is
+# already CycloneDX JSON does not collide with its converted counterpart.
+_SBOM_DOWNLOAD_DIR = "/tmp/stackable/downloads"
+
+
+def _download_file(url: str, path: str) -> bool:
+    """Download a URL to a local path and report whether it succeeded."""
+    request = urllib.request.Request(url)
+    request.add_header("User-Agent", "stack-scanner")
+
+    try:
+        with urllib.request.urlopen(request) as response:
+            with open(path, "wb") as f:
+                f.write(response.read())
+    except urllib.error.URLError as error:
+        print(f"Failed to download {url}: {error}")
+        return False
+
+    print(f"Downloaded {url} to {path}")
+    return True
+
+
+def _convert_to_cyclonedx_json(input_path: str, output_path: str) -> bool:
+    """Convert an SBOM to CycloneDX JSON 1.5 and report whether it succeeded.
+
+    Both scanners need this normalisation: Trivy does not read CycloneDX XML at
+    all, and Grype rejects documents that declare a spec version it does not know
+    yet, failing with "sbom format not recognized" on the 1.7 documents the ODBC
+    drivers publish. 1.5 is understood by every scanner version in use.
+    """
+    input_format = "xml" if input_path.endswith(".xml") else "json"
+
+    result = subprocess.run(
+        [
+            "cyclonedx",
+            "convert",
+            "--input-file",
+            input_path,
+            "--input-format",
+            input_format,
+            "--output-file",
+            output_path,
+            "--output-format",
+            "json",
+            "--output-version",
+            "v1_5",
+        ],
+    )
+    if result.returncode != 0:
+        print(f"Failed to convert {input_path} to CycloneDX JSON 1.5")
+        return False
+
+    print(f"Converted {input_path} to {output_path}")
+    return True
+
+
+def scan_github_release_sboms(
     secobserve_api_token: str, upload_sbom: Optional[bool] = False
 ) -> None:
-    """Download and scan the latest stackablectl SBOMs from GitHub releases.
+    """Download and scan the SBOMs of the latest release of each GitHub project.
 
-    The stackable-cockpit project publishes CycloneDX SBOMs alongside each
-    binary.  We download the SBOM files and scan them with Trivy and Grype in
-    SBOM mode.
+    The projects in GITHUB_SBOM_RELEASES publish CycloneDX SBOMs as release
+    assets next to their binaries. Each asset is downloaded, normalised to
+    CycloneDX JSON 1.5 and scanned with Trivy and Grype in SBOM mode.
     """
-    version = get_latest_github_release("stackabletech", "stackable-cockpit")
-    if version is None:
-        print("WARNING: Could not determine latest stackablectl version, skipping.")
-        return
+    os.makedirs(_SBOM_DOWNLOAD_DIR, exist_ok=True)
 
-    print(f"Scanning stackablectl {version}")
+    for project in GITHUB_SBOM_RELEASES:
+        repository = project["repository"]
+        product_name = project["product_name"]
 
-    for sbom_name in _STACKABLECTL_SBOMS:
-        download_url = (
-            f"https://github.com/stackabletech/stackable-cockpit/releases/download"
-            f"/{version}/{sbom_name}"
-        )
-        xml_path = f"/tmp/stackable/{sbom_name}"
-
-        request = urllib.request.Request(download_url)
-        request.add_header("User-Agent", "stack-scanner")
-        try:
-            with urllib.request.urlopen(request) as response:
-                with open(xml_path, "wb") as f:
-                    f.write(response.read())
-            print(f"Downloaded SBOM to {xml_path}")
-        except urllib.error.URLError as error:
-            print(f"Failed to download SBOM {sbom_name}: {error}")
+        tag = get_latest_github_release(_GITHUB_SBOM_OWNER, repository)
+        if tag is None:
+            print(
+                f"WARNING: Could not determine latest {repository} release, skipping."
+            )
             continue
 
-        # Trivy does not support CycloneDX XML, so convert to JSON first.
-        json_name = sbom_name.replace(".cdx.xml", ".cdx.json")
-        json_path = f"/tmp/stackable/{json_name}"
-        result = subprocess.run(
-            [
-                "cyclonedx",
-                "convert",
-                "--input-file",
-                xml_path,
-                "--input-format",
-                "xml",
-                "--output-file",
-                json_path,
-                "--output-format",
-                "json",
-                "--output-version",
-                "v1_5",
-            ],
-        )
-        if result.returncode != 0:
-            print(f"Failed to convert {sbom_name} from XML to JSON")
-            continue
-        print(f"Converted {xml_path} to {json_path}")
+        # The ODBC drivers tag their releases "v<version>" but name the assets
+        # after the bare version, which also makes for a nicer branch name.
+        version = tag.removeprefix("v")
 
-        scan_sbom(
-            secobserve_api_token,
-            json_name,
-            "stackablectl",
-            version,
-            upload_sbom=upload_sbom,
-        )
+        print(f"Scanning {product_name} {tag}")
+
+        for asset in project["assets"]:
+            file_name = asset["file"].format(tag=tag, version=version)
+            download_url = (
+                f"https://github.com/{_GITHUB_SBOM_OWNER}/{repository}"
+                f"/releases/download/{tag}/{file_name}"
+            )
+            download_path = f"{_SBOM_DOWNLOAD_DIR}/{file_name}"
+
+            if not _download_file(download_url, download_path):
+                continue
+
+            json_name = re.sub(r"\.cdx\.(xml|json)$", ".cdx.json", file_name)
+            if not _convert_to_cyclonedx_json(
+                download_path, f"/tmp/stackable/{json_name}"
+            ):
+                continue
+
+            scan_sbom(
+                secobserve_api_token,
+                json_name,
+                product_name,
+                f"{version}{asset.get('branch_suffix', '')}",
+                upload_sbom=upload_sbom,
+            )
 
 
 def _build_base_env(
@@ -910,11 +1004,12 @@ def scan_release(
     # already or are arch-agnostic manifests.
     scan_additional_images(secobserve_api_token, release, upload_sbom=upload_sbom)
 
-    # Scan the latest stackablectl binary from GitHub releases.
-    # Only run for the dev release to avoid redundant scans when multiple releases
-    # are processed in the same workflow run (stackablectl is release-independent).
+    # Scan the SBOMs published as GitHub release assets (stackablectl, the ODBC
+    # drivers). Only run for the dev release to avoid redundant scans when
+    # multiple releases are processed in the same workflow run: these projects
+    # are versioned independently of the SDP release.
     if release == DEV_RELEASE:
-        scan_stackablectl(secobserve_api_token, upload_sbom=upload_sbom)
+        scan_github_release_sboms(secobserve_api_token, upload_sbom=upload_sbom)
 
 
 def scan_image(
