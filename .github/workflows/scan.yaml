@@ -13,6 +13,13 @@ jobs:
     permissions:
       contents: read
     steps:
+      # Oh Dear only gets pinged by scheduled runs, so a manual run cannot hide a missed nightly scan
+      - name: Report start to Oh Dear
+        if: github.event_name == 'schedule'
+        continue-on-error: true
+        env:
+          OH_DEAR_PING_URL: ${{ secrets.OH_DEAR_PING_URL }}
+        run: curl -fsS --retry 3 -o /dev/null "$OH_DEAR_PING_URL/starting"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -37,3 +44,18 @@ jobs:
         run: poetry install
       - name: Scan dev plus current and previous release
         run: poetry run python stack_scanner/main.py scan-latest ${{ secrets.SECOBSERVE_API_TOKEN }}
+      - name: Report success to Oh Dear
+        if: success() && github.event_name == 'schedule'
+        continue-on-error: true
+        env:
+          OH_DEAR_PING_URL: ${{ secrets.OH_DEAR_PING_URL }}
+        run: curl -fsS --retry 3 -o /dev/null "$OH_DEAR_PING_URL"
+      - name: Report failure to Oh Dear
+        if: (failure() || cancelled()) && github.event_name == 'schedule'
+        continue-on-error: true
+        env:
+          OH_DEAR_PING_URL: ${{ secrets.OH_DEAR_PING_URL }}
+        run: |
+          curl -fsS --retry 3 -o /dev/null "$OH_DEAR_PING_URL" \
+            --data-urlencode "exit_code=1" \
+            --data-urlencode "failure_message=Run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} failed"
