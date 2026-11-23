@@ -431,11 +431,15 @@ def get_image_project(image_name: str, docker_images_dir: str = "docker-images")
 def get_latest_releases(
     count: int, docker_images_dir: str = "docker-images"
 ) -> list[str]:
-    """Return the most recent stable SDP release tags from the docker-images repo.
+    """Return the latest patch release of the most recent SDP release lines.
 
-    Releases are calendar-versioned git tags (e.g. "26.3.0"). Pre-release tags
-    such as "26.3.0-rc1" are ignored. Tags are fetched first so the result is
-    not limited to whatever was already checked out locally.
+    Releases are calendar-versioned git tags (e.g. "26.3.0") in the docker-images
+    repo. A release line is identified by year and month ("26.3"); a patch
+    release ("26.3.1") supersedes the earlier releases of its line, so only the
+    newest patch of each of the last `count` lines is returned. Without this, a
+    patch release would push the previous release line out of the selection.
+    Pre-release tags such as "26.3.0-rc1" are ignored. Tags are fetched first so
+    the result is not limited to whatever was already checked out locally.
     """
     subprocess.run(["git", "fetch", "--tags", "--force"], cwd=docker_images_dir)
 
@@ -447,9 +451,28 @@ def get_latest_releases(
         check=True,
     )
 
-    releases = [tag for tag in result.stdout.split() if _STABLE_RELEASE_RE.match(tag)]
-    releases.sort(key=lambda tag: tuple(int(part) for part in tag.split(".")))
-    return releases[-count:]
+    return _latest_patch_per_release_line(result.stdout.split(), count)
+
+
+def _latest_patch_per_release_line(tags: list[str], count: int) -> list[str]:
+    """Return the newest patch release of each of the last `count` release lines.
+
+    E.g. ["26.3.0", "26.7.0", "26.7.1", "26.11.0"] with a count of 2 yields
+    ["26.7.1", "26.11.0"].
+    """
+    latest_patches: dict[tuple[int, int], tuple[int, int, int]] = {}
+    for tag in tags:
+        if not _STABLE_RELEASE_RE.match(tag):
+            continue
+        year, month, patch = (int(part) for part in tag.split("."))
+        release_line = (year, month)
+        if (year, month, patch) > latest_patches.get(release_line, (0, 0, -1)):
+            latest_patches[release_line] = (year, month, patch)
+
+    release_lines = sorted(latest_patches)[-count:]
+    return [
+        ".".join(str(part) for part in latest_patches[line]) for line in release_lines
+    ]
 
 
 def get_latest_github_release(owner: str, repo: str) -> str | None:
